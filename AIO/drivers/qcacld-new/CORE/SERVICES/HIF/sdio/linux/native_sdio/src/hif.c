@@ -76,8 +76,8 @@ MODULE_PARM_DESC(mmcbuswidth, "Set MMC driver Bus Width: 1-1Bit, 4-4Bit, 8-8Bit"
 EXPORT_SYMBOL(mmcbuswidth);
 
 //unsigned int mmcclock = 0;
-//unsigned int mmcclock = 166000000;
-unsigned int mmcclock = 166666666;
+//unsigned int mmcclock = 166666666;
+unsigned int mmcclock = 200000000;
 module_param(mmcclock, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH);
 MODULE_PARM_DESC(mmcclock, "Set MMC driver Clock value");
 EXPORT_SYMBOL(mmcclock);
