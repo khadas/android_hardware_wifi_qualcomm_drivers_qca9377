@@ -12827,16 +12827,19 @@ static int hdd_driver_init( void)
   \return - 0 for success, non zero for failure
 
   --------------------------------------------------------------------------*/
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
 extern  int wifi_setup_dt(void);
 extern  void wifi_teardown_dt(void);
+#endif
 extern  void extern_wifi_set_enable(int is_on);
 extern  void sdio_reinit(void);
 
 #ifdef MODULE
 static int __init hdd_module_init ( void)
 {
-
-    wifi_setup_dt();    
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+    wifi_setup_dt();
+#endif
         extern_wifi_set_enable(0);
         mdelay(200);
         extern_wifi_set_enable(1);
@@ -12849,7 +12852,9 @@ sdio_reinit();
 static int __init hdd_module_init ( void)
 {
    /* Driver initialization is delayed to fwpath_changed_handler */
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
 wifi_teardown_dt();
+#endif
    return 0;
 }
 #endif /* #ifdef MODULE */
