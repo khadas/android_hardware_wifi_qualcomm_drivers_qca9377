@@ -1,7 +1,6 @@
 Kconfig.kernel
 Kconfig.versions
 .kernel_config_md5
-.config
 .config.old
 *~
 *.o
@@ -12,7 +11,6 @@ Kconfig.versions
 *.tmp
 *.ver
 modules.order
-backport-include/backport/autoconf.h
 modules
 kconf/mconf
 kconf/conf

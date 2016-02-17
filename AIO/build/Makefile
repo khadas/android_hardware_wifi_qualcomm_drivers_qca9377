@@ -51,7 +51,7 @@ export FW_WLAN_NAME=qcacld-new
 export CFG80211_NAME=backports
 
 #################################################################################################################################
-clean: hostapd_clean wpa_supplicant_clean drivers_clean rootfs_clean
+clean: drivers_clean rootfs_clean
 
 #
 # rootfs build

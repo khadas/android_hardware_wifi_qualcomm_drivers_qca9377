@@ -2043,8 +2043,11 @@ static int hifDeviceSuspend(struct device *dev)
                     AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("wow mode failure\n"));
                     return -1;
                 }
+            } else {
+                  if (wma_suspend_target(temp_module, 0)) {
+                     printk(KERN_ERR "wma_suspend_target failed.\n");
+		  }
             }
-
             if (pm_flag & MMC_PM_WAKE_SDIO_IRQ){
                 AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("hifDeviceSuspend: wow enter\n"));
                 config = HIF_DEVICE_POWER_DOWN;
