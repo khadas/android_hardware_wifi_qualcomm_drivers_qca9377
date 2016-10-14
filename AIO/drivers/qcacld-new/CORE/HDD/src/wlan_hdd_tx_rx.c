@@ -1109,6 +1109,7 @@ int hdd_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
    pAdapter->stats.tx_bytes += skb->len;
    ++pAdapter->stats.tx_packets;
    ++pAdapter->hdd_stats.hddTxRxStats.pkt_tx_count;
+   pAdapter->last_active_time = vos_timer_get_system_time();
 
    /*
     * TODO: Should we stop net queues when txrx returns non-NULL?.
@@ -2265,6 +2266,7 @@ VOS_STATUS hdd_rx_packet_cbk(v_VOID_t *vosContext,
    ++pAdapter->hdd_stats.hddTxRxStats.rxPackets;
    ++pAdapter->stats.rx_packets;
    pAdapter->stats.rx_bytes += skb->len;
+   pAdapter->last_active_time = vos_timer_get_system_time();
 #ifdef WLAN_FEATURE_HOLD_RX_WAKELOCK
    vos_wake_lock_timeout_acquire(&pHddCtx->rx_wake_lock,
                                  HDD_WAKE_LOCK_DURATION);

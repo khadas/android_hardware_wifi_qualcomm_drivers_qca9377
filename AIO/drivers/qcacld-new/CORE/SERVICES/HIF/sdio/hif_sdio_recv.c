@@ -625,6 +625,12 @@ static A_STATUS HIFDevIssueRecvPacketBundle(HIF_SDIO_DEVICE *pDev,
 
     bundleSpaceRemaining = HTC_MAX_MSG_PER_BUNDLE_RX * target->TargetCreditSize;
     pPacketRxBundle = AllocateHTCBundleRxPacket(target);
+    /* weiguang.ruan add, check before use*/
+    if (pPacketRxBundle == NULL) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("%s, no memory for pPacketRxBundle\n",__FUNCTION__));
+        return A_NO_MEMORY;
+    }
+
     pBundleBuffer = pPacketRxBundle->pBuffer;
 
     for(i = 0; !HTC_QUEUE_EMPTY(pRecvPktQueue) && i < HTC_MAX_MSG_PER_BUNDLE_RX; i++){

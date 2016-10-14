@@ -12840,11 +12840,11 @@ static int __init hdd_module_init ( void)
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
     wifi_setup_dt();
 #endif
-        extern_wifi_set_enable(0);
-        mdelay(200);
-        extern_wifi_set_enable(1);
-        mdelay(200);
-sdio_reinit();
+    extern_wifi_set_enable(0);
+    mdelay(200);
+    extern_wifi_set_enable(1);
+    mdelay(200);
+    sdio_reinit();
 
    return hdd_driver_init();
 }
@@ -12852,9 +12852,6 @@ sdio_reinit();
 static int __init hdd_module_init ( void)
 {
    /* Driver initialization is delayed to fwpath_changed_handler */
-#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
-wifi_teardown_dt();
-#endif
    return 0;
 }
 #endif /* #ifdef MODULE */
@@ -12956,6 +12953,12 @@ static void hdd_driver_exit(void)
 
 done:
    vos_wake_lock_destroy(&wlan_wake_lock);
+   mdelay(100);
+   extern_wifi_set_enable(0);
+   mdelay(100);
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+   wifi_teardown_dt();
+#endif
    pr_info("%s: driver unloaded\n", WLAN_MODULE_NAME);
 }
 

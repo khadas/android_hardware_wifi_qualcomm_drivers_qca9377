@@ -7761,9 +7761,12 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
     int rssi = 0;
     hdd_context_t *pHddCtx;
     int status;
-#ifdef CONFIG_CNSS
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39))
     struct timespec ts;
+#else
+    struct timeval tv;
 #endif
+
 
     pHddCtx = WLAN_HDD_GET_CTX(pAdapter);
     status = wlan_hdd_validate_context(pHddCtx);
@@ -7793,17 +7796,15 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
 
     memcpy(mgmt->bssid, bss_desc->bssId, ETH_ALEN);
 
-#ifdef CONFIG_CNSS
-    /* Android does not want the timestamp from the frame.
-       Instead it wants a monotonic increasing value */
-    cnss_get_monotonic_boottime(&ts);
-    mgmt->u.probe_resp.timestamp =
-         ((u64)ts.tv_sec * 1000000) + (ts.tv_nsec / 1000);
-#else
-    /* keep old behavior for non-open source (for now) */
-    memcpy(&mgmt->u.probe_resp.timestamp, bss_desc->timeStamp,
-            sizeof (bss_desc->timeStamp));
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 39))
+    get_monotonic_boottime(&ts);
+    mgmt->u.probe_resp.timestamp = ((u64)ts.tv_sec*1000000)
+                                       + ts.tv_nsec / 1000;
+#else
+    do_gettimeofday(&tv);
+     mgmt->u.probe_resp.timestamp = ((u64)tv.tv_sec*1000000)
+                                        + tv.tv_usec;
 #endif
 
     mgmt->u.probe_resp.beacon_int = bss_desc->beaconInterval;
@@ -10839,13 +10840,14 @@ static tANI_U8 wlan_hdd_get_mcs_idx(tANI_U16 maxRate, tANI_U8 rate_flags,
 }
 #endif
 static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
-                                           struct net_device *dev,
+                                           struct net_device *dev, int idx,
                                            u8* mac, struct station_info *sinfo)
 {
     hdd_adapter_t *pAdapter = WLAN_HDD_GET_PRIV_PTR( dev );
     hdd_station_ctx_t *pHddStaCtx = WLAN_HDD_GET_STATION_CTX_PTR(pAdapter);
     int ssidlen = pHddStaCtx->conn_info.SSID.SSID.length;
     tANI_U8 rate_flags;
+    v_TIME_t cur_time = vos_timer_get_system_time();
 
     hdd_context_t *pHddCtx = (hdd_context_t*) wiphy_priv(wiphy);
     hdd_config_t  *pCfg    = pHddCtx->cfg_ini;
@@ -10873,8 +10875,12 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
     eDataRate11ACMaxMcs vhtMaxMcs;
 #endif /* WLAN_FEATURE_11AC */
 
+    if (idx != 0)
+        return -ENOENT;
+
     ENTER();
 
+    memcpy(mac, pAdapter->macAddressCurrent.bytes, VOS_MAC_ADDR_SIZE);
     if ((eConnectionState_Associated != pHddStaCtx->conn_info.connState) ||
             (0 == ssidlen))
     {
@@ -10892,6 +10898,8 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
                    "%s: HDD context is not valid", __func__);
         return status;
     }
+    sinfo->inactive_time = cur_time - pAdapter->last_active_time;
+    sinfo->filled |= STATION_INFO_INACTIVE_TIME;
 
     wlan_hdd_get_rssi(pAdapter, &sinfo->signal);
     sinfo->filled |= STATION_INFO_SIGNAL;
@@ -11281,12 +11289,14 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
 
     sinfo->tx_bytes = pAdapter->stats.tx_bytes;
     sinfo->filled |= STATION_INFO_TX_BYTES;
-
+/*
     sinfo->tx_packets =
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[0] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[1] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[2] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[3];
+*/
+    sinfo->tx_packets = pAdapter->stats.tx_packets;
 
     sinfo->tx_retries =
        pAdapter->hdd_stats.summary_stat.retry_cnt[0] +
@@ -11325,7 +11335,21 @@ static int wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
     int ret;
 
     vos_ssr_protect(__func__);
-    ret = __wlan_hdd_cfg80211_get_station(wiphy, dev, mac, sinfo);
+/*    ret = __wlan_hdd_cfg80211_get_station(wiphy, dev, mac, sinfo);*/
+    ret = __wlan_hdd_cfg80211_get_station(wiphy, dev, 0, mac, sinfo);
+    vos_ssr_unprotect(__func__);
+
+    return ret;
+}
+
+static int wlan_hdd_cfg80211_dump_station(struct wiphy *wiphy,
+                                         struct net_device *dev,
+                                         int idx, u8* mac, struct station_info *sinfo)
+{
+    int ret;
+
+    vos_ssr_protect(__func__);
+    ret = __wlan_hdd_cfg80211_get_station(wiphy, dev, idx, mac, sinfo);
     vos_ssr_unprotect(__func__);
 
     return ret;
@@ -15096,6 +15120,7 @@ static struct cfg80211_ops wlan_hdd_cfg80211_ops =
      .set_default_mgmt_key = wlan_hdd_set_default_mgmt_key,
      .set_txq_params = wlan_hdd_set_txq_params,
      .get_station = wlan_hdd_cfg80211_get_station,
+     .dump_station = wlan_hdd_cfg80211_dump_station,
      .set_power_mgmt = wlan_hdd_cfg80211_set_power_mgmt,
      .del_station  = wlan_hdd_cfg80211_del_station,
      .add_station  = wlan_hdd_cfg80211_add_station,
