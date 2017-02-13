@@ -253,7 +253,7 @@ static VOS_STATUS hdd_parse_ese_beacon_req(tANI_U8 *pValue,
  #define A_MEMCMP(addr1, addr2, len)     memcmp((addr1), (addr2), (len))
  #define A_ROUND_UP(x, y)  ((((x) + ((y) - 1)) / (y)) * (y))
  
- char qcafwpath[256] = "/system/etc/wifi/firmware";
+ char qcafwpath[256] = "/system/etc/wifi/qca9377";
  
  int android_readwrite_file(const A_CHAR *filename, A_CHAR *rbuf, const A_CHAR *wbuf, size_t length)
  {
