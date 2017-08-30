@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2015 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -93,6 +93,7 @@ typedef unsigned long dma_addr_t;
 
 #define __adf_os_ull(_num)  _num ## ULL
 
+typedef struct completion __adf_os_comp_t;
 struct __adf_net_drv;
 
 typedef int (*__adf_os_intr)(void *);
@@ -131,6 +132,9 @@ struct __adf_device  {
     struct device          *dev;
     __adf_os_resource_t    res;
     __adf_os_intr          func;/*Interrupt handler*/
+#ifdef QCA_ARP_SPOOFING_WAR
+    void                   *filter_cb;
+#endif
 };
 
 typedef struct __adf_device *__adf_os_device_t;

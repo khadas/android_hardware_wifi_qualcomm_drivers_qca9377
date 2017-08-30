@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -140,8 +140,8 @@ tVOS_CONCURRENCY_MODE vos_get_concurrency_mode( void );
 v_BOOL_t vos_concurrent_open_sessions_running(void);
 v_BOOL_t vos_max_concurrent_connections_reached(void);
 void vos_clear_concurrent_session_count(void);
-
-#ifdef WLAN_FEATURE_MBSSID
-v_BOOL_t vos_concurrent_sap_sessions_running(v_VOID_t);
-#endif
+v_BOOL_t vos_is_multiple_active_sta_sessions (void);
+v_BOOL_t vos_is_sta_active_connection_exists (void);
+v_BOOL_t vos_concurrent_beaconing_sessions_running(v_VOID_t);
+v_BOOL_t vos_active_session_exists (tVOS_CON_MODE mode);
 #endif // !defined __VOS_GETBIN_H

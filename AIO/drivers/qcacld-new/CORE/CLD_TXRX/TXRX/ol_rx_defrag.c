@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -128,14 +128,11 @@ static inline void OL_RX_FRAG_PULL_HDR(htt_pdev_handle htt_pdev,
     rx_desc_len = htt_rx_msdu_rx_desc_size_hl(htt_pdev, rx_desc);
     adf_nbuf_pull_head(frag, rx_desc_len + hdrsize);
 }
-#define OL_RX_FRAG_CLONE(frag) \
-    adf_nbuf_clone(frag)
 #else
 #define OL_RX_FRAG_GET_MAC_HDR(pdev, frag) \
     (struct ieee80211_frame *) adf_nbuf_data(frag)
 #define OL_RX_FRAG_PULL_HDR(pdev, frag, hdrsize) \
     adf_nbuf_pull_head(frag, hdrsize);
-#define OL_RX_FRAG_CLONE(frag) NULL/* no-op */
 #endif /* CONFIG_HL_SUPPORT */
 
 static inline void
@@ -204,7 +201,9 @@ ol_rx_frag_indication_handler(
     htt_pdev = pdev->htt_pdev;
     peer = ol_txrx_peer_find_by_id(pdev, peer_id);
 
-    if (htt_rx_ind_flush(pdev->htt_pdev, rx_frag_ind_msg) && peer) {
+    /* In case of reorder offload, we will never get a flush indication */
+    if (!ol_cfg_is_full_reorder_offload(pdev->ctrl_pdev) &&
+         htt_rx_ind_flush(pdev->htt_pdev, rx_frag_ind_msg) && peer) {
         htt_rx_frag_ind_flush_seq_num_range(
             pdev->htt_pdev, rx_frag_ind_msg, &seq_num_start, &seq_num_end);
         /*
@@ -216,14 +215,22 @@ ol_rx_frag_indication_handler(
     if (peer) {
         htt_rx_frag_pop(htt_pdev, rx_frag_ind_msg, &head_msdu, &tail_msdu);
         adf_os_assert(head_msdu == tail_msdu);
-        rx_mpdu_desc = htt_rx_mpdu_desc_list_next(htt_pdev, rx_frag_ind_msg);
+        if (ol_cfg_is_full_reorder_offload(pdev->ctrl_pdev)) {
+            rx_mpdu_desc = htt_rx_mpdu_desc_list_next(htt_pdev, head_msdu);
+        } else {
+            rx_mpdu_desc = htt_rx_mpdu_desc_list_next(htt_pdev, rx_frag_ind_msg);
+        }
         seq_num = htt_rx_mpdu_desc_seq_num(htt_pdev, rx_mpdu_desc);
         OL_RX_ERR_STATISTICS_1(pdev, peer->vdev, peer, rx_mpdu_desc, OL_RX_ERR_NONE_FRAG);
         ol_rx_reorder_store_frag(pdev, peer, tid, seq_num, head_msdu);
     } else {
         /* invalid frame - discard it */
         htt_rx_frag_pop(htt_pdev, rx_frag_ind_msg, &head_msdu, &tail_msdu);
-        htt_rx_mpdu_desc_list_next(htt_pdev, rx_frag_ind_msg);
+        if (ol_cfg_is_full_reorder_offload(pdev->ctrl_pdev)) {
+            htt_rx_msdu_desc_retrieve(htt_pdev, head_msdu);
+        } else {
+            htt_rx_mpdu_desc_list_next(htt_pdev, rx_frag_ind_msg);
+        }
         htt_rx_desc_frame_free(htt_pdev, head_msdu);
     }
     /* request HTT to provide new rx MSDU buffers for the target to fill. */
@@ -281,8 +288,8 @@ ol_rx_reorder_store_frag(
     more_frag = mac_hdr->i_fc[1] & IEEE80211_FC1_MORE_FRAG;
 
     if ((!more_frag) && (!fragno) && (!rx_reorder_array_elem->head)) {
-        rx_reorder_array_elem->head = frag;
-        rx_reorder_array_elem->tail = frag;
+        ol_rx_fraglist_insert(htt_pdev, &rx_reorder_array_elem->head,
+            &rx_reorder_array_elem->tail, frag, &all_frag_present);
         adf_nbuf_set_next(frag, NULL);
         ol_rx_defrag(pdev, peer, tid, rx_reorder_array_elem->head);
         rx_reorder_array_elem->head = NULL;
@@ -343,11 +350,8 @@ ol_rx_fraglist_insert(
     struct ieee80211_frame *mac_hdr, *cmac_hdr, *next_hdr, *lmac_hdr;
     u_int8_t fragno, cur_fragno, lfragno, next_fragno;
     u_int8_t last_morefrag = 1, count = 0;
-    adf_nbuf_t frag_clone;
 
     adf_os_assert(frag);
-    frag_clone = OL_RX_FRAG_CLONE(frag);
-    frag = frag_clone ? frag_clone : frag;
 
     mac_hdr = (struct ieee80211_frame *) OL_RX_FRAG_GET_MAC_HDR(htt_pdev, frag);
     fragno = adf_os_le16_to_cpu(*(u_int16_t *) mac_hdr->i_seq) &
@@ -438,14 +442,17 @@ ol_rx_defrag_waitlist_remove(
     struct ol_txrx_pdev_t *pdev = peer->vdev->pdev;
     struct ol_rx_reorder_t *rx_reorder = &peer->tids_rx_reorder[tid];
 
-    if (rx_reorder->defrag_waitlist_elem.tqe_next != NULL ||
-        rx_reorder->defrag_waitlist_elem.tqe_prev != NULL) {
+    if (rx_reorder->defrag_waitlist_elem.tqe_prev != NULL) {
 
         TAILQ_REMOVE(&pdev->rx.defrag.waitlist, rx_reorder,
                 defrag_waitlist_elem);
 
         rx_reorder->defrag_waitlist_elem.tqe_next = NULL;
         rx_reorder->defrag_waitlist_elem.tqe_prev = NULL;
+    } else if (rx_reorder->defrag_waitlist_elem.tqe_next != NULL) {
+        TXRX_PRINT(TXRX_PRINT_LEVEL_FATAL_ERR, "waitlist->tqe_prv = NULL\n");
+        VOS_ASSERT(0);
+        rx_reorder->defrag_waitlist_elem.tqe_next = NULL;
     }
 }
 
@@ -507,7 +514,11 @@ ol_rx_defrag(
 
     /* bypass defrag for safe mode */
     if (vdev->safemode) {
-        ol_rx_deliver(vdev, peer, tid, frag_list);
+        if (ol_cfg_is_full_reorder_offload(pdev->ctrl_pdev)) {
+            ol_rx_in_order_deliver(vdev, peer, tid, frag_list);
+        } else {
+            ol_rx_deliver(vdev, peer, tid, frag_list);
+        }
         return;
     }
 
@@ -1036,6 +1047,7 @@ ol_rx_defrag_decap_recombine(
     adf_nbuf_set_next(rx_nbuf, NULL);
     while (msdu) {
         htt_rx_msdu_desc_free(htt_pdev, msdu);
+        adf_net_buf_debug_release_skb(msdu);
         tmp = adf_nbuf_next(msdu);
         adf_nbuf_set_next(msdu, NULL);
         OL_RX_FRAG_PULL_HDR(htt_pdev, msdu, hdrsize);

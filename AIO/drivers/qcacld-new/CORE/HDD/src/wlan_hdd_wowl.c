@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -207,7 +207,7 @@ v_BOOL_t hdd_add_wowl_ptrn (hdd_adapter_t *pAdapter, const char * ptrn)
       goto next_ptrn;
     }
 
-    //compute the end of pattern sring
+    /* Compute the end of pattern string */
     offset = offset + 2*localPattern.ucPatternMaskSize;
     if(offset+1 != len) //offset begins with 0
     {
@@ -230,7 +230,7 @@ v_BOOL_t hdd_add_wowl_ptrn (hdd_adapter_t *pAdapter, const char * ptrn)
       ptrn += 2; //skip to next byte
     }
 
-    ptrn++; // Skip over the ':' seperator after the pattern
+    ptrn++; /* Skip over the ':' separator after the pattern */
 
     // Extract the pattern Mask
     for(i=0; i < localPattern.ucPatternMaskSize; i++)
@@ -241,7 +241,7 @@ v_BOOL_t hdd_add_wowl_ptrn (hdd_adapter_t *pAdapter, const char * ptrn)
     }
 
     //All is good. Store the pattern locally
-    g_hdd_wowl_ptrns[first_empty_slot] = (char*) kmalloc(len+1, GFP_KERNEL);
+    g_hdd_wowl_ptrns[first_empty_slot] = (char*) vos_mem_malloc(len+1);
     if(g_hdd_wowl_ptrns[first_empty_slot] == NULL)
     {
       VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
@@ -262,7 +262,7 @@ v_BOOL_t hdd_add_wowl_ptrn (hdd_adapter_t *pAdapter, const char * ptrn)
       // Add failed, so invalidate the local storage
       VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
           "sme_WowlAddBcastPattern failed with error code (%d)", halStatus );
-      kfree(g_hdd_wowl_ptrns[first_empty_slot]);
+      vos_mem_free(g_hdd_wowl_ptrns[first_empty_slot]);
       g_hdd_wowl_ptrns[first_empty_slot] = NULL;
     }
 
@@ -321,7 +321,7 @@ v_BOOL_t hdd_del_wowl_ptrn (hdd_adapter_t *pAdapter, const char * ptrn)
       VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
           "Deleted pattern with id %d [%s]", id, g_hdd_wowl_ptrns[id]);
 
-      kfree(g_hdd_wowl_ptrns[id]);
+      vos_mem_free(g_hdd_wowl_ptrns[id]);
       g_hdd_wowl_ptrns[id] = NULL;
       return VOS_TRUE;
     }
@@ -386,6 +386,8 @@ v_BOOL_t hdd_add_wowl_ptrn_debugfs(hdd_adapter_t *pAdapter, v_U8_t pattern_idx,
   localPattern.ucPatternId = pattern_idx;
   localPattern.ucPatternByteOffset = pattern_offset;
   localPattern.ucPatternSize = pattern_len;
+  localPattern.sessionId = sessionId;
+
   if (localPattern.ucPatternSize > SIR_WOWL_BCAST_PATTERN_MAX_SIZE) {
     VOS_TRACE( VOS_MODULE_ID_HDD, VOS_TRACE_LEVEL_ERROR,
              "%s: WoW pattern size (%d) greater than max (%d)",
@@ -594,7 +596,7 @@ v_BOOL_t hdd_exit_wowl (hdd_adapter_t*pAdapter)
 
 /**============================================================================
   @brief hdd_init_wowl() - Init function which will initialize the WoWL module
-  and perform any required intial configuration
+  and perform any required initial configuration
 
   @return           : FALSE if any errors encountered
                     : TRUE otherwise

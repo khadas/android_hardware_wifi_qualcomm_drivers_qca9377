@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -45,37 +45,17 @@
 #include "sirMacPropExts.h"
 #include "sirCommon.h"
 #include "sirDebug.h"
-#include "wniCfgSta.h"
+#include "wni_cfg.h"
 #include "csrApi.h"
 #include "sapApi.h"
 #include "dot11f.h"
+#include "sys/queue.h"
 
 /// Maximum number of scan hash table entries
 #define LIM_MAX_NUM_OF_SCAN_RESULTS 256
 
-// Link Test Report Status. This appears in the report frame
-#define LINK_TEST_STATUS_SUCCESS                0x1
-#define LINK_TEST_STATUS_UNSUPPORTED_RATE       0x2
-#define LINK_TEST_STATUS_INVALID_ADDR           0x3
-
-// Amount of time in nanosec to be sleep-waited before
-// enabling RHP (1 millisec)
-#define LIM_RHP_WORK_AROUND_DURATION 1000000
-
-// Maximum amount of Quiet duration in millisec
-#define LIM_MAX_QUIET_DURATION 32
-
-#define LIM_TX_WQ_EMPTY_SLEEP_NS                100000
-
-// Sending Disassociate frames threshold
-#define LIM_SEND_DISASSOC_FRAME_THRESHOLD       2
-#define LIM_HASH_MISS_TIMER_MS                  10000
-
 // Deferred Message Queue Length
-#define MAX_DEFERRED_QUEUE_LEN                  20
-
-// Maximum Buffer size
-#define LIM_MAX_BUF_SIZE                        8192
+#define MAX_DEFERRED_QUEUE_LEN                  80
 
 // Maximum number of PS - TIM's to be sent with out wakeup from STA
 #define LIM_TIM_WAIT_COUNT_FACTOR          5
@@ -88,7 +68,11 @@
 #define IS_5G_BAND(__rfBand)     ((__rfBand & 0x3) == 0x2)
 #define IS_24G_BAND(__rfBand)    ((__rfBand & 0x3) == 0x1)
 
-#define LIM_MAX_CSA_IE_UPDATES                  ( 5 )
+#ifdef CHANNEL_HOPPING_ALL_BANDS
+#define CHAN_HOP_ALL_BANDS_ENABLE        1
+#else
+#define CHAN_HOP_ALL_BANDS_ENABLE        0
+#endif
 
 // enums exported by LIM are as follows
 
@@ -103,7 +87,8 @@ typedef enum eLimSystemRole
     eLIM_BT_AMP_AP_ROLE,
     eLIM_P2P_DEVICE_ROLE,
     eLIM_P2P_DEVICE_GO,
-    eLIM_P2P_DEVICE_CLIENT
+    eLIM_P2P_DEVICE_CLIENT,
+    eLIM_NDI_ROLE
 } tLimSystemRole;
 
 /**
@@ -224,7 +209,6 @@ typedef enum eLimDot11hChanSwStates
     eLIM_11H_CHANSW_END
 } tLimDot11hChanSwStates;
 
-#ifdef GEN4_SCAN
 
 //WLAN_SUSPEND_LINK Related
 typedef void (*SUSPEND_RESUME_LINK_CALLBACK)(tpAniSirGlobal pMac, eHalStatus status, tANI_U32 *data);
@@ -248,7 +232,6 @@ typedef enum eLimHalScanState
   eLIM_HAL_RESUME_LINK_WAIT_STATE,
 //end WLAN_SUSPEND_LINK Related
 } tLimLimHalScanState;
-#endif // GEN4_SCAN
 
 // LIM states related to A-MPDU/BA
 // This is used for maintaining the state between PE and HAL only.
@@ -330,31 +313,19 @@ struct tLimScanResultNode
 
 #ifdef FEATURE_OEM_DATA_SUPPORT
 
-#ifndef OEM_DATA_REQ_SIZE
-#ifdef QCA_WIFI_2_0
-#define OEM_DATA_REQ_SIZE 280
-#else
-#define OEM_DATA_REQ_SIZE 134
-#endif
-#endif
-#ifndef OEM_DATA_RSP_SIZE
-#ifdef QCA_WIFI_2_0
-#define OEM_DATA_RSP_SIZE 1724
-#else
-#define OEM_DATA_RSP_SIZE 1968
-#endif
-#endif
-
 // OEM Data related structure definitions
 typedef struct sLimMlmOemDataReq
 {
     tSirMacAddr           selfMacAddr;
-    tANI_U8               oemDataReq[OEM_DATA_REQ_SIZE];
+    uint32_t              data_len;
+    uint8_t               *data;
 } tLimMlmOemDataReq, *tpLimMlmOemDataReq;
 
 typedef struct sLimMlmOemDataRsp
 {
-   tANI_U8                oemDataRsp[OEM_DATA_RSP_SIZE];
+   bool                   target_rsp;
+   uint32_t               rsp_len;
+   uint8_t                *oem_data_rsp;
 } tLimMlmOemDataRsp, *tpLimMlmOemDataRsp;
 #endif
 
@@ -372,13 +343,15 @@ typedef struct tLimPreAuthNode
     tANI_U8             fFree:1;
     tANI_U8             rsvd:5;
     TX_TIMER            timer;
+    tANI_U16            seqNum;
+    v_TIME_t            timestamp;
 }tLimPreAuthNode, *tpLimPreAuthNode;
 
 // Pre-authentication table definition
 typedef struct tLimPreAuthTable
 {
     tANI_U32        numEntry;
-    tpLimPreAuthNode pTable;
+    tLimPreAuthNode **pTable;
 }tLimPreAuthTable, *tpLimPreAuthTable;
 
 /// Per STA context structure definition
@@ -414,22 +387,29 @@ typedef struct sLimDeferredMsgQParams
     tANI_U16         write;
 } tLimDeferredMsgQParams, *tpLimDeferredMsgQParams;
 
-typedef struct sLimTraceQ
+#ifdef SAP_AUTH_OFFLOAD
+/**
+ * slim_deferred_sap_msg - member of sap deferred queue
+ *
+ * list_elem: tq element
+ * deferredmsg: deferred msg
+ */
+struct slim_deferred_sap_msg
 {
-    tANI_U32                type;
-    tLimSmeStates      smeState;
-    tLimMlmStates      mlmState;
-    tANI_U32                value;
-    tANI_U32                value2;
-} tLimTraceQ;
+	TAILQ_ENTRY(slim_deferred_sap_msg) list_elem;
+	tSirMsgQ      deferredmsg;
+};
 
-typedef struct sLimTraceParams
+/**
+ * slim_deferred_sap_queue - sap msg deferred queue
+ *
+ * head: head  of tq
+ */
+struct slim_deferred_sap_queue
 {
-    tLimTraceQ    traceQueue[1024];
-    tANI_U16           write;
-    tANI_U16           enabled;
-} tLimTraceParams;
-
+	TAILQ_HEAD(t_slim_deferred_sap_msg_head, slim_deferred_sap_msg) tq_head;
+};
+#endif
 typedef struct sCfgProtection
 {
     tANI_U32 overlapFromlla:1;
@@ -494,21 +474,19 @@ struct tLimIbssPeerNode
 {
     tLimIbssPeerNode         *next;
     tSirMacAddr              peerMacAddr;
-    tANI_U8                       aniIndicator:1;
     tANI_U8                       extendedRatesPresent:1;
     tANI_U8                       edcaPresent:1;
     tANI_U8                       wmeEdcaPresent:1;
     tANI_U8                       wmeInfoPresent:1;
     tANI_U8                       htCapable:1;
     tANI_U8                       vhtCapable:1;
-    tANI_U8                       rsvd:1;
+    tANI_U8                       rsvd:2;
     tANI_U8                       htSecondaryChannelOffset;
     tSirMacCapabilityInfo    capabilityInfo;
     tSirMacRateSet           supportedRates;
     tSirMacRateSet           extendedRates;
     tANI_U8                   supportedMCSSet[SIZE_OF_SUPPORTED_MCS_SET];
     tSirMacEdcaParamSetIE    edcaParams;
-    tANI_U16 propCapability;
     tANI_U8  erpIePresent;
 
     //HT Capabilities of IBSS Peer
@@ -692,13 +670,6 @@ typedef struct sLimSpecMgmtInfo
     tANI_BOOLEAN       fRadarIntrConfigured; /* Whether radar interrupt has been configured */
 }tLimSpecMgmtInfo, *tpLimSpecMgmtInfo;
 
-#ifdef FEATURE_WLAN_TDLS_INTERNAL
-typedef struct sLimDisResultList
-{
-    struct sLimDisResultList *next ;
-    tSirTdlsPeerInfo tdlsDisPeerInfo ;
-}tLimDisResultList ;
-#endif
 
 #ifdef FEATURE_WLAN_TDLS
 /*

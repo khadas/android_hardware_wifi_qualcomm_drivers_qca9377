@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2010 2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2004-2010, 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -25,27 +25,50 @@
  * to the Linux Foundation.
  */
 
-//------------------------------------------------------------------------------
-// <copyright file="wlan_defs.h" company="Atheros">
-//    Copyright (c) 2004-2010, 2013 Atheros Corporation.  All rights reserved.
-// $ATH_LICENSE_HOSTSDK0_C$
-//------------------------------------------------------------------------------
-//==============================================================================
-// Author(s): ="Atheros"
-//==============================================================================
 #ifndef __WLANDEFS_H__
 #define __WLANDEFS_H__
+
+#include <a_osapi.h> /* A_COMPILE_TIME_ASSERT */
+#include <osdep.h>
 
 /*
  * This file contains WLAN definitions that may be used across both
  * Host and Target software.
  */
-#if defined(CONFIG_AR900B_SUPPORT) || defined(AR900B)
-#define MAX_SPATIAL_STREAM   4
-#else
-#define MAX_SPATIAL_STREAM   3
+
+
+/*
+ * MAX_SPATIAL_STREAM should be defined in a fwconfig_xxx.h file,
+ * but for now provide a default value here in case it's not defined
+ * in the fwconfig_xxx.h file.
+ */
+#ifndef MAX_SPATIAL_STREAM
+#define MAX_SPATIAL_STREAM 3
 #endif
 
+/*
+ * MAX_SPATIAL_STREAM_ANY -
+ * what is the largest number of spatial streams that any target supports
+ */
+#define MAX_SPATIAL_STREAM_ANY 4
+
+#ifndef CONFIG_160MHZ_SUPPORT
+#define CONFIG_160MHZ_SUPPORT 0 /* default: 160 MHz channels not supported */
+#endif
+
+#ifndef SUPPORT_11AX
+#define SUPPORT_11AX 0 /* 11ax not supported by default */
+#endif
+
+/* defines to set Packet extension values which can be 0 us, 8 us or 16 us */
+/* NOTE: Below values cannot be changed without breaking WMI Compatibility */
+#define MAX_HE_NSS               8
+#define MAX_HE_MODULATION        8
+#define MAX_HE_RU                4
+#define HE_MODULATION_NONE       7
+#define HE_PET_0_USEC            0
+#define HE_PET_8_USEC            1
+#define HE_PET_16_USEC           2
 
 typedef enum {
     MODE_11A        = 0,   /* 11a Mode */
@@ -59,13 +82,52 @@ typedef enum {
     MODE_11AC_VHT20 = 8,
     MODE_11AC_VHT40 = 9,
     MODE_11AC_VHT80 = 10,
-//    MODE_11AC_VHT160 = 11,
     MODE_11AC_VHT20_2G = 11,
     MODE_11AC_VHT40_2G = 12,
     MODE_11AC_VHT80_2G = 13,
-    MODE_UNKNOWN    = 14,
-    MODE_MAX        = 14
+#if CONFIG_160MHZ_SUPPORT
+    MODE_11AC_VHT80_80 = 14,
+    MODE_11AC_VHT160   = 15,
+#endif
+
+#if SUPPORT_11AX
+    MODE_11AX_HE20 = 16,
+    MODE_11AX_HE40 = 17,
+    MODE_11AX_HE80 = 18,
+    MODE_11AX_HE80_80 = 19,
+    MODE_11AX_HE160 = 20,
+    MODE_11AX_HE20_2G = 21,
+    MODE_11AX_HE40_2G = 22,
+    MODE_11AX_HE80_2G = 23,
+#endif
+
+    /*
+     * MODE_UNKNOWN should not be used within the host / target interface.
+     * Thus, it is permissible for ODE_UNKNOWN to be conditionally-defined,
+     * taking different values when compiling for different targets.
+     */
+
+    MODE_UNKNOWN,
+    MODE_UNKNOWN_NO_160MHZ_SUPPORT = 14, /* not needed? */
+    //MODE_UNKNOWN_NO_11AX_SUPPORT = 16, /* not needed? */
+    //MODE_UNKNOWN_11AX_SUPPORT = 24, /* not needed? */
+    MODE_UNKNOWN_160MHZ_SUPPORT = MODE_UNKNOWN, /* not needed? */
+
+    MODE_MAX        = MODE_UNKNOWN,
+    MODE_MAX_NO_160_MHZ_SUPPORT = MODE_UNKNOWN_NO_160MHZ_SUPPORT,
+    MODE_MAX_160_MHZ_SUPPORT    = MODE_UNKNOWN_160MHZ_SUPPORT,
+
 } WLAN_PHY_MODE;
+
+#if CONFIG_160MHZ_SUPPORT == 0
+A_COMPILE_TIME_ASSERT(
+    mode_unknown_value_consistency_Check,
+    MODE_UNKNOWN == MODE_UNKNOWN_NO_160MHZ_SUPPORT);
+#else
+A_COMPILE_TIME_ASSERT(
+    mode_unknown_value_consistency_Check,
+    MODE_UNKNOWN == MODE_UNKNOWN_160MHZ_SUPPORT);
+#endif
 
 typedef enum {
     VHT_MODE_NONE = 0,  /* NON VHT Mode, e.g., HT, DSSS, CCK */
@@ -81,6 +143,9 @@ typedef enum {
     WLAN_11AG_CAPABILITY  = 3,
 }WLAN_CAPABILITY;
 
+#define SUB20_MODE_NONE (0x00)
+#define SUB20_MODE_5MHZ (0x01)
+#define SUB20_MODE_10MHZ (0x02)
 
 #if defined(CONFIG_AR900B_SUPPORT) || defined(AR900B)
 #define A_RATEMASK A_UINT64
@@ -92,9 +157,26 @@ typedef enum {
 #define A_RATEMASK_NUM_BITS ((sizeof (A_RATEMASK)) << 3)
 
 
+#if CONFIG_160MHZ_SUPPORT
+#define IS_MODE_VHT(mode) (((mode) == MODE_11AC_VHT20) || \
+        ((mode) == MODE_11AC_VHT40)     || \
+        ((mode) == MODE_11AC_VHT80)     || \
+        ((mode) == MODE_11AC_VHT80_80) || \
+        ((mode) == MODE_11AC_VHT160))
+#else
 #define IS_MODE_VHT(mode) (((mode) == MODE_11AC_VHT20) || \
         ((mode) == MODE_11AC_VHT40) || \
         ((mode) == MODE_11AC_VHT80))
+#endif
+
+#define IS_MODE_HE(mode) (((mode) == MODE_11AX_HE20) || \
+        ((mode) == MODE_11AX_HE40)     || \
+        ((mode) == MODE_11AX_HE80)     || \
+        ((mode) == MODE_11AX_HE80_80)  || \
+        ((mode) == MODE_11AX_HE160)    || \
+        ((mode) == MODE_11AX_HE20_2G)  || \
+        ((mode) == MODE_11AX_HE40_2G)  || \
+        ((mode) == MODE_11AX_HE80_2G))
 
 #define IS_MODE_VHT_2G(mode) (((mode) == MODE_11AC_VHT20_2G) || \
         ((mode) == MODE_11AC_VHT40_2G) || \
@@ -116,30 +198,35 @@ typedef enum {
                                  ((mode) == MODE_11NG_HT40))
 #define IS_MODE_11GONLY(mode)   ((mode) == MODE_11GONLY)
 
+
 enum {
-    REGDMN_MODE_11A              = 0x00001,      /* 11a channels */
-    REGDMN_MODE_TURBO            = 0x00002,      /* 11a turbo-only channels */
-    REGDMN_MODE_11B              = 0x00004,      /* 11b channels */
-    REGDMN_MODE_PUREG            = 0x00008,      /* 11g channels (OFDM only) */
-    REGDMN_MODE_11G              = 0x00008,      /* XXX historical */
-    REGDMN_MODE_108G             = 0x00020,      /* 11g+Turbo channels */
-    REGDMN_MODE_108A             = 0x00040,      /* 11a+Turbo channels */
-    REGDMN_MODE_XR               = 0x00100,      /* XR channels */
-    REGDMN_MODE_11A_HALF_RATE    = 0x00200,      /* 11A half rate channels */
-    REGDMN_MODE_11A_QUARTER_RATE = 0x00400,      /* 11A quarter rate channels */
-    REGDMN_MODE_11NG_HT20        = 0x00800,      /* 11N-G HT20 channels */
-    REGDMN_MODE_11NA_HT20        = 0x01000,      /* 11N-A HT20 channels */
-    REGDMN_MODE_11NG_HT40PLUS    = 0x02000,      /* 11N-G HT40 + channels */
-    REGDMN_MODE_11NG_HT40MINUS   = 0x04000,      /* 11N-G HT40 - channels */
-    REGDMN_MODE_11NA_HT40PLUS    = 0x08000,      /* 11N-A HT40 + channels */
-    REGDMN_MODE_11NA_HT40MINUS   = 0x10000,      /* 11N-A HT40 - channels */
-    REGDMN_MODE_11AC_VHT20       = 0x20000,      /* 5Ghz, VHT20 */
-    REGDMN_MODE_11AC_VHT40PLUS   = 0x40000,      /* 5Ghz, VHT40 + channels */
-    REGDMN_MODE_11AC_VHT40MINUS  = 0x80000,      /* 5Ghz  VHT40 - channels */
-    REGDMN_MODE_11AC_VHT80       = 0x100000,     /* 5Ghz, VHT80 channels */
-    REGDMN_MODE_11AC_VHT20_2G    = 0x200000,     /* 2Ghz, VHT20 */
-    REGDMN_MODE_11AC_VHT40_2G    = 0x400000,     /* 2Ghz, VHT40 */
-    REGDMN_MODE_11AC_VHT80_2G    = 0x800000,     /* 2Ghz, VHT80 */
+    REGDMN_MODE_11A              = 0x00000001,  /* 11a channels */
+    REGDMN_MODE_TURBO            = 0x00000002,  /* 11a turbo-only channels */
+    REGDMN_MODE_11B              = 0x00000004,  /* 11b channels */
+    REGDMN_MODE_PUREG            = 0x00000008,  /* 11g channels (OFDM only) */
+    REGDMN_MODE_11G              = 0x00000008,  /* XXX historical */
+    REGDMN_MODE_108G             = 0x00000020,  /* 11g+Turbo channels */
+    REGDMN_MODE_108A             = 0x00000040,  /* 11a+Turbo channels */
+    REGDMN_MODE_XR               = 0x00000100,  /* XR channels */
+    REGDMN_MODE_11A_HALF_RATE    = 0x00000200,  /* 11A half rate channels */
+    REGDMN_MODE_11A_QUARTER_RATE = 0x00000400,  /* 11A quarter rate channels */
+    REGDMN_MODE_11NG_HT20        = 0x00000800,  /* 11N-G HT20 channels */
+    REGDMN_MODE_11NA_HT20        = 0x00001000,  /* 11N-A HT20 channels */
+    REGDMN_MODE_11NG_HT40PLUS    = 0x00002000,  /* 11N-G HT40 + channels */
+    REGDMN_MODE_11NG_HT40MINUS   = 0x00004000,  /* 11N-G HT40 - channels */
+    REGDMN_MODE_11NA_HT40PLUS    = 0x00008000,  /* 11N-A HT40 + channels */
+    REGDMN_MODE_11NA_HT40MINUS   = 0x00010000,  /* 11N-A HT40 - channels */
+    REGDMN_MODE_11AC_VHT20       = 0x00020000,  /* 5Ghz, VHT20 */
+    REGDMN_MODE_11AC_VHT40PLUS   = 0x00040000,  /* 5Ghz, VHT40 + channels */
+    REGDMN_MODE_11AC_VHT40MINUS  = 0x00080000,  /* 5Ghz  VHT40 - channels */
+    REGDMN_MODE_11AC_VHT80       = 0x000100000, /* 5Ghz, VHT80 channels */
+    REGDMN_MODE_11AC_VHT20_2G    = 0x000200000, /* 2Ghz, VHT20 */
+    REGDMN_MODE_11AC_VHT40_2G    = 0x000400000, /* 2Ghz, VHT40 */
+    REGDMN_MODE_11AC_VHT80_2G    = 0x000800000, /* 2Ghz, VHT80 */
+    REGDMN_MODE_11AC_VHT160      = 0x001000000, /* 5Ghz, VHT160 */
+    REGDMN_MODE_11AC_VHT40_2GPLUS  = 0x002000000, /* 2Ghz, VHT40+ */
+    REGDMN_MODE_11AC_VHT40_2GMINUS = 0x004000000, /* 2Ghz, VHT40- */
+    REGDMN_MODE_11AC_VHT80_80      = 0x008000000, /* 5GHz, VHT80+80 */
 };
 
 #define REGDMN_MODE_ALL       (0xFFFFFFFF)       /* REGDMN_MODE_ALL is defined out of the enum
@@ -238,18 +325,23 @@ typedef struct {
 /* NOTE: NUM_DYN_BW and NUM_SCHED_ENTRIES cannot be changed without breaking WMI Compatibility */
 #define NUM_SCHED_ENTRIES           2
 #define NUM_DYN_BW_MAX              4
-/* Current Product only uses 20/40/80 */
-#define NUM_DYN_BW                  3
+
+/* Some products only use 20/40/80; some use 20/40/80/160 */
+#ifndef NUM_DYN_BW
+#define NUM_DYN_BW                  3 /* default: support up through 80 MHz */
+#endif
 
 #define NUM_DYN_BW_MASK             0x3
 
 #define PROD_SCHED_BW_ENTRIES       (NUM_SCHED_ENTRIES * NUM_DYN_BW)
 typedef A_UINT8 A_RATE;
 
-#if NUM_DYN_BW  > 3
-// Extend rate table module for 80+80/160 MHz first
-#error "Extend rate table module for 80+80/160 MHz first"
+#if NUM_DYN_BW  > 4
+// Extend rate table module first
+#error "Extend rate table module first"
 #endif
+
+#define MAX_IBSS_PEERS 32
 
 #if defined(CONFIG_AR900B_SUPPORT) || defined(AR900B)
 typedef struct{
@@ -277,6 +369,7 @@ typedef struct{
     A_RATE      probe_rix;
     A_UINT8     num_valid_rates;
     A_UINT8     rtscts_tpc;
+    A_UINT8     dd_profile;
 } RC_TX_RATE_SCHEDULE;
 
 #else
@@ -316,9 +409,17 @@ typedef struct{
     A_UINT8     sh_pream;
     A_UINT8     bw_in_service;
     A_RATE      probe_rix;
+    A_UINT8     dd_profile;
 } RC_TX_RATE_INFO;
 
-
+/*
+ * Temporarily continue to provide the WHAL_RC_INIT_RC_MASKS def in wlan_defs.h
+ * for older targets.
+ * The WHAL_RX_INIT_RC_MASKS macro def needs to be moved into ratectrl_11ac.h
+ * for all targets, but until this is complete, the WHAL_RC_INIT_RC_MASKS def
+ * will be maintained here in its old location.
+ */
+#if CONFIG_160MHZ_SUPPORT == 0
 #define WHAL_RC_INIT_RC_MASKS(_rm) do {                                     \
         _rm[WHAL_RC_MASK_IDX_NON_HT] = A_RATEMASK_OFDM_CCK;                 \
         _rm[WHAL_RC_MASK_IDX_HT_20] = A_RATEMASK_HT_20;                     \
@@ -327,6 +428,7 @@ typedef struct{
         _rm[WHAL_RC_MASK_IDX_VHT_40] = A_RATEMASK_VHT_40;                   \
         _rm[WHAL_RC_MASK_IDX_VHT_80] = A_RATEMASK_VHT_80;                   \
         } while (0)
+#endif
 
 /**
  * strucutre describing host memory chunk.
@@ -341,8 +443,11 @@ typedef struct {
    A_UINT32 size;
 } wlan_host_memory_chunk;
 
-#define NUM_UNITS_IS_NUM_VDEVS   0x1
-#define NUM_UNITS_IS_NUM_PEERS   0x2
+#define NUM_UNITS_IS_NUM_VDEVS        0x1
+#define NUM_UNITS_IS_NUM_PEERS        0x2
+#define NUM_UNITS_IS_NUM_ACTIVE_PEERS 0x4
+/* request host to allocate memory contiguously */
+#define REQ_TO_HOST_FOR_CONT_MEMORY   0x8
 
 /**
  * structure used by FW for requesting host memory
@@ -377,7 +482,6 @@ typedef enum {
     AUTO_DTIM   = 0x04,
 } BEACON_DTIM_POLICY;
 
-#if defined (AR900B)
 /* During test it is observed that 6 * 400 = 2400 can
  * be alloced in addition to CFG_TGT_NUM_MSDU_DESC.
  * If there is any change memory requirement, this number
@@ -404,8 +508,6 @@ typedef enum {
  * smart antenna = 50
  */
 #define MEMORY_REQ_FOR_PEER 800
-#endif
-
 /*
  * NB: it is important to keep all the fields in the structure dword long
  * so that it is easy to handle the statistics in BE host.
@@ -521,12 +623,11 @@ struct wlan_dbg_rx_stats {
 #endif
 };
 
-#if defined(AR900B)
+
 struct wlan_dbg_mem_stats {
     A_UINT32 iram_free_size;
     A_UINT32 dram_free_size;
 };
-#endif
 
 struct wlan_dbg_peer_stats {
 
@@ -548,6 +649,11 @@ typedef struct {
     A_UINT32 rssi_chain0;
     A_UINT32 rssi_chain1;
     A_UINT32 rssi_chain2;
+/*
+ * TEMPORARY: leave rssi_chain3 in place for AR900B builds until code using
+ * rssi_chain3 has been converted to use wlan_dbg_rx_rate_info_v2_t.
+ * At that time, this rssi_chain3 field will be deleted.
+ */
 #if defined(AR900B)
     A_UINT32 rssi_chain3;
 #endif
@@ -556,6 +662,11 @@ typedef struct {
 typedef struct {
     A_UINT32 mcs[10];
     A_UINT32 sgi[10];
+/*
+ * TEMPORARY: leave nss conditionally defined, until all code that
+ * requires nss[4] is converted to use wlan_dbg_tx_rate_info_v2_t.
+ * At that time, this nss array will be made length = 3 unconditionally.
+ */
 #if defined(CONFIG_AR900B_SUPPORT) || defined(AR900B)
     A_UINT32 nss[4];
 #else
@@ -569,19 +680,47 @@ typedef struct {
     A_UINT32 ack_rssi;
 } wlan_dbg_tx_rate_info_t ;
 
-#if defined(AR900B)
+#define WLAN_MAX_MCS 10
+
+typedef struct {
+    A_UINT32 mcs[WLAN_MAX_MCS];
+    A_UINT32 sgi[WLAN_MAX_MCS];
+    A_UINT32 nss[MAX_SPATIAL_STREAM_ANY];
+    A_UINT32 nsts;
+    A_UINT32 stbc[WLAN_MAX_MCS];
+    A_UINT32 bw[NUM_DYN_BW_MAX];
+    A_UINT32 pream[6];
+    A_UINT32 ldpc;
+    A_UINT32 txbf;
+    A_UINT32 mgmt_rssi;
+    A_UINT32 data_rssi;
+    A_UINT32 rssi_chain0;
+    A_UINT32 rssi_chain1;
+    A_UINT32 rssi_chain2;
+    A_UINT32 rssi_chain3;
+    A_UINT32 reserved[8];
+} wlan_dbg_rx_rate_info_v2_t ;
+
+typedef struct {
+    A_UINT32 mcs[WLAN_MAX_MCS];
+    A_UINT32 sgi[WLAN_MAX_MCS];
+    A_UINT32 nss[MAX_SPATIAL_STREAM_ANY];
+    A_UINT32 stbc[WLAN_MAX_MCS];
+    A_UINT32 bw[NUM_DYN_BW_MAX];
+    A_UINT32 pream[4];
+    A_UINT32 ldpc;
+    A_UINT32 rts_cnt;
+    A_UINT32 ack_rssi;
+    A_UINT32 reserved[8];
+} wlan_dbg_tx_rate_info_v2_t ;
+
 #define WHAL_DBG_PHY_ERR_MAXCNT 18
 #define WHAL_DBG_SIFS_STATUS_MAXCNT 8
 #define WHAL_DBG_SIFS_ERR_MAXCNT 8
-#define WHAL_DBG_CMD_RESULT_MAXCNT 8
+#define WHAL_DBG_CMD_RESULT_MAXCNT 11
 #define WHAL_DBG_CMD_STALL_ERR_MAXCNT 4
-#define WHAL_DBG_CMD_RESULT_MAXCNT 8
-#define WHAL_DBG_FLUSH_REASON_MAXCNT 18
+#define WHAL_DBG_FLUSH_REASON_MAXCNT 40
 
-#define WHAL_DBG_PHY_ERR_MAXCNT 18
-#define WHAL_DBG_SIFS_ERR_MAXCNT 8
-#define WHAL_DBG_CMD_STALL_ERR_MAXCNT 4
-#define WHAL_DBG_FLUSH_REASON_MAXCNT 18
 typedef enum {
     WIFI_URRN_STATS_FIRST_PKT,
     WIFI_URRN_STATS_BETWEEN_MPDU,
@@ -594,6 +733,7 @@ typedef struct wlan_dbg_txbf_snd_stats {
     A_UINT32 cbf_40[4];
     A_UINT32 cbf_80[4];
     A_UINT32 sounding[9];
+    A_UINT32 cbf_160[4];
 }wlan_dbg_txbf_snd_stats_t;
 
 typedef struct wlan_dbg_wifi2_error_stats {
@@ -611,12 +751,17 @@ typedef struct wlan_dbg_wifi2_error2_stats {
     A_UINT32 sifs_errs[WHAL_DBG_SIFS_ERR_MAXCNT];
 }wlan_dbg_wifi2_error2_stats_t;
 
+#define WLAN_DBG_STATS_SIZE_TXBF_VHT 10
+#define WLAN_DBG_STATS_SIZE_TXBF_HT 8
+#define WLAN_DBG_STATS_SIZE_TXBF_OFDM 8
+#define WLAN_DBG_STATS_SIZE_TXBF_CCK 7
+
 typedef struct wlan_dbg_txbf_data_stats {
-    A_UINT32 tx_txbf_vht[10];
-    A_UINT32 rx_txbf_vht[10];
-    A_UINT32 tx_txbf_ht[8];
-    A_UINT32 tx_txbf_ofdm[8];
-    A_UINT32 tx_txbf_cck[7];
+    A_UINT32 tx_txbf_vht[WLAN_DBG_STATS_SIZE_TXBF_VHT];
+    A_UINT32 rx_txbf_vht[WLAN_DBG_STATS_SIZE_TXBF_VHT];
+    A_UINT32 tx_txbf_ht[WLAN_DBG_STATS_SIZE_TXBF_HT];
+    A_UINT32 tx_txbf_ofdm[WLAN_DBG_STATS_SIZE_TXBF_OFDM];
+    A_UINT32 tx_txbf_cck[WLAN_DBG_STATS_SIZE_TXBF_CCK];
 } wlan_dbg_txbf_data_stats_t;
 
 struct wlan_dbg_tx_mu_stats {
@@ -642,6 +787,7 @@ struct wlan_dbg_tx_selfgen_stats {
     A_UINT32 mu_bar_2;
     A_UINT32 cts_burst;
     A_UINT32 su_ndp_err;
+    A_UINT32 su_ndpa_err;
     A_UINT32 mu_ndp_err;
     A_UINT32 mu_brp1_err;
     A_UINT32 mu_brp2_err;
@@ -669,13 +815,16 @@ typedef struct wlan_dbg_stats_wifi2 {
     struct wlan_dbg_tx_mu_stats tx_mu;
     wlan_dgb_sifs_resp_stats_t sifs_resp_info;
 } wlan_dbg_wifi2_stats_t;
-#endif
 
 typedef struct {
     wlan_dbg_rx_rate_info_t rx_phy_info;
     wlan_dbg_tx_rate_info_t tx_rate_info;
 } wlan_dbg_rate_info_t;
 
+typedef struct {
+    wlan_dbg_rx_rate_info_v2_t rx_phy_info;
+    wlan_dbg_tx_rate_info_v2_t tx_rate_info;
+} wlan_dbg_rate_info_v2_t;
 
 struct wlan_dbg_stats {
     struct wlan_dbg_tx_stats tx;
@@ -686,7 +835,6 @@ struct wlan_dbg_stats {
     struct wlan_dbg_peer_stats peer;
 };
 
-#if defined(AR900B)
 #define DBG_STATS_MAX_HWQ_NUM 10
 #define DBG_STATS_MAX_TID_NUM 20
 #define DBG_STATS_MAX_CONG_NUM 16
@@ -700,6 +848,5 @@ struct wlan_dbg_tidq_stats{
     A_UINT32 wlan_dbg_tid_txq_status;
     struct wlan_dbg_txq_stats txq_st;
 };
-#endif
 
 #endif /* __WLANDEFS_H__ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -38,6 +38,7 @@
 
 #include <ol_ctrl_api.h>  /* ol_pdev_handle */
 #include <ol_txrx_api.h>  /* ol_txrx_pdev_handle */
+#include <ol_htt_api.h>
 
 #define DEBUG_DMA_DONE
 
@@ -59,7 +60,13 @@
 #define HTT_TX_EXT_TID_NON_QOS_MCAST_BCAST 16
 #define HTT_TX_EXT_TID_MGMT                17
 #define HTT_TX_EXT_TID_INVALID             31
+#define HTT_TX_EXT_TID_NONPAUSE            19
 
+#ifdef DEBUG_RX_RING_BUFFER
+#define HTT_RX_RING_BUFF_DBG_LIST          1024
+#endif
+
+#define HTT_HTC_PKT_MISCLIST_SIZE           6
 /**
  * @brief General specification of the tx frame contents
  *
@@ -196,6 +203,14 @@ struct htt_tx_credit_t
     adf_os_atomic_t target_delta;
 };
 
+#ifdef DEBUG_RX_RING_BUFFER
+struct rx_buf_debug {
+        uint32_t               paddr;
+        void *                 vaddr;
+        bool                   in_use;
+};
+#endif
+
 struct htt_pdev_t {
     ol_pdev_handle ctrl_pdev;
     ol_txrx_pdev_handle txrx_pdev;
@@ -220,6 +235,7 @@ struct htt_pdev_t {
         int is_high_latency;
         int is_full_reorder_offload;
         int default_tx_comp_req;
+        uint8_t is_first_wakeup_packet;
     } cfg;
     struct {
         u_int8_t major;
@@ -315,7 +331,7 @@ struct htt_pdev_t {
         int rx_reset;
         u_int8_t htt_rx_restore;
 #endif
-        struct htt_rx_hash_bucket * hash_table;
+        struct htt_rx_hash_bucket **hash_table;
         u_int32_t listnode_offset;
     } rx_ring;
     int rx_desc_size_hl;
@@ -325,10 +341,9 @@ struct htt_pdev_t {
 
     struct {
         int size; /* of each HTT tx desc */
-        int pool_elems;
-        int alloc_cnt;
-        char *pool_vaddr;
-        u_int32_t pool_paddr;
+        uint16_t pool_elems;
+        uint16_t alloc_cnt;
+        struct adf_os_mem_multi_page_t desc_pages;
         u_int32_t *freelist;
         adf_os_dma_mem_context(memctx);
     } tx_descs;
@@ -337,6 +352,7 @@ struct htt_pdev_t {
         void *pdev, A_STATUS status, adf_nbuf_t msdu, u_int16_t msdu_id);
 
     HTT_TX_MUTEX_TYPE htt_tx_mutex;
+    HTT_TX_MUTEX_TYPE credit_mutex;
 
     struct {
         int htc_err_cnt;
@@ -352,6 +368,14 @@ struct htt_pdev_t {
 #endif /* IPA_UC_OFFLOAD */
 
     struct htt_tx_credit_t htt_tx_credit;
+
+#ifdef DEBUG_RX_RING_BUFFER
+    struct rx_buf_debug *rx_buff_list;
+    int rx_buff_index;
+#endif
+
+    /* callback function for packetdump */
+    tp_rx_pkt_dump_cb rx_pkt_dump_cb;
 };
 
 #endif /* _HTT_TYPES__H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -54,6 +54,8 @@
 extern "C" {
 #endif /* __cplusplus */
 
+#define WAKE_LOCK_NAME_LEN 80
+
 /*-------------------------------------------------------------------------
   Event ID: EVENT_WLAN_SECURITY
   ------------------------------------------------------------------------*/
@@ -70,12 +72,12 @@ typedef struct
 } vos_event_wlan_security_payload_type;
 
 /*-------------------------------------------------------------------------
-  Event ID: EVENT_WLAN_STATUS
+  Event ID: EVENT_WLAN_STATUS_V2
   ------------------------------------------------------------------------*/
 typedef struct
 {
    v_U8_t eventId;
-   v_U8_t ssid[6];
+   v_U8_t ssid[32];
    v_U8_t bssType;
    v_U8_t rssi;
    v_U8_t channel;
@@ -229,6 +231,32 @@ typedef struct
 } vos_event_wlan_powersave_wow_payload_type;
 
 /*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_POWERSAVE_WOW_STATS
+  ------------------------------------------------------------------------*/
+typedef struct
+{
+   uint32_t    wow_ucast_wake_up_count;
+   uint32_t    wow_bcast_wake_up_count;
+   uint32_t    wow_ipv4_mcast_wake_up_count;
+   uint32_t    wow_ipv6_mcast_wake_up_count;
+   uint32_t    wow_ipv6_mcast_ra_stats;
+   uint32_t    wow_ipv6_mcast_ns_stats;
+   uint32_t    wow_ipv6_mcast_na_stats;
+   uint32_t    wow_pno_match_wake_up_count;
+   uint32_t    wow_pno_complete_wake_up_count;
+   uint32_t    wow_gscan_wake_up_count;
+   uint32_t    wow_low_rssi_wake_up_count;
+   uint32_t    wow_rssi_breach_wake_up_count;
+   uint32_t    wow_icmpv4_count;
+   uint32_t    wow_icmpv6_count;
+   uint32_t    wow_oem_response_wake_up_count;
+   uint32_t    Reserved_1;
+   uint32_t    Reserved_2;
+   uint32_t    Reserved_3;
+   uint32_t    Reserved_4;
+} vos_event_wlan_powersave_wow_stats;
+
+/*-------------------------------------------------------------------------
   Event ID: EVENT_WLAN_BTC
   ------------------------------------------------------------------------*/
 typedef struct
@@ -244,11 +272,254 @@ typedef struct
    v_U8_t  mode;
 } vos_event_wlan_btc_type;
 
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_EAPOL
+  ------------------------------------------------------------------------*/
+struct vos_event_wlan_eapol
+{
+	uint8_t   event_sub_type;
+	uint8_t   eapol_packet_type;
+	uint16_t  eapol_key_info;
+	uint16_t  eapol_rate;
+	uint8_t   dest_addr[6];
+	uint8_t   src_addr[6];
+};
+
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_LOW_RESOURCE_FAILURE
+  ------------------------------------------------------------------------*/
+/**
+ * struct vos_event_wlan_low_resource_failure - Structure holding the
+ * low resource failure information
+ * @event_sub_type: Gives further information about reason for
+ * low resource condition
+ *
+ * This structure will hold the low resource failure information
+ */
+struct vos_event_wlan_low_resource_failure {
+	uint8_t   event_sub_type;
+};
+
+/**
+ * enum resource_failure_type - Reason for low resource failure condition
+ * @WIFI_EVENT_MEMORY_FAILURE: Memory failure
+ *
+ * This enum has the reason codes why the low resource situation is observed
+ */
+enum resource_failure_type {
+	WIFI_EVENT_MEMORY_FAILURE,
+};
+
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_WAKE_LOCK
+  ------------------------------------------------------------------------*/
+/**
+ * struct vos_event_wlan_wake_lock - Structure holding the wakelock information
+ * @status: Whether the wakelock is taken/released
+ * @reason: Reason for taking this wakelock
+ * @timeout: Timeout value in case of timed wakelocks
+ * @name_len: Length of the name of the wakelock that will follow
+ * @name: Name of the wakelock
+ *
+ * This structure will hold the wakelock informations
+ */
+struct vos_event_wlan_wake_lock
+{
+	uint32_t status;
+	uint32_t reason;
+	uint32_t timeout;
+	uint32_t name_len;
+	char     name[WAKE_LOCK_NAME_LEN];
+};
+
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_LOG_COMPLETE
+  ------------------------------------------------------------------------*/
+/**
+ * struct vos_event_wlan_log_complete - Holds log completion details
+ * @is_fatal: Indicates if the event is fatal or not
+ * @indicator: Source of the bug report - Framework/Host/Firmware
+ * @reason_code: Reason for triggering bug report
+ * @reserved: Reserved field
+ *
+ * This structure holds the log completion related information
+ */
+struct vos_event_wlan_log_complete {
+	uint32_t is_fatal;
+	uint32_t indicator;
+	uint32_t reason_code;
+	uint32_t reserved;
+};
+
+/**
+ * struct vos_event_tdls_teardown - tdls teardown diag event
+ * @reason: reason for tear down
+ * @peer_mac: peer mac
+ *
+ * This structure contain tdls teardown diag event info
+ */
+
+struct vos_event_tdls_teardown {
+	uint32_t reason;
+	uint8_t peer_mac[6];
+};
+
+/**
+ * struct vos_event_tdls_enable_link - tdls enable link event
+ * @peer_mac: peer mac
+ * @is_off_chan_supported: if off channel supported
+ * @is_off_chan_configured: if off channel configured
+ * @is_off_chan_established: if off channel established
+ *
+ * This structure contain tdls enable link diag event info
+ */
+struct vos_event_tdls_enable_link {
+	uint8_t   peer_mac[6];
+	uint8_t   is_off_chan_supported;
+	uint8_t   is_off_chan_configured;
+	uint8_t   is_off_chan_established;
+};
+
+/**
+ * struct vos_event_suspend - suspend/resume state
+ * @state: suspend/resume state
+ *
+ * This structure contains suspend resume diag event info
+ */
+struct vos_event_suspend {
+	uint8_t state;
+};
+
+/**
+ * struct vos_event_offload_req - offload state
+ * @offload_type: offload type
+ * @state: enabled or disabled state
+ *
+ * This structure contains offload diag event info
+ */
+struct vos_event_offload_req {
+	uint8_t offload_type;
+	uint8_t state;
+};
+
+/**
+ * struct vos_event_tdls_scan_rejected - scan
+ * rejected due to tdls
+ * @status: rejected status
+ *
+ * This structure contains scan rejected due to
+ * tdls event info
+ */
+struct vos_event_tdls_scan_rejected {
+	uint8_t status;
+};
+
+/**
+ * struct vos_event_tdls_tx_rx_mgmt - for TX RX management frame
+ * @event_id: event ID
+ * @tx_rx: tx or rx
+ * @type: type of frame
+ * @action_sub_type: action frame type
+ * @peer_mac: peer mac
+ *
+ * This structure contains tdls TX RX management frame info
+ */
+struct vos_event_tdls_tx_rx_mgmt {
+	uint8_t   event_id;
+	uint8_t   tx_rx;
+	uint8_t   type;
+	uint8_t   action_sub_type;
+	uint8_t   peer_mac[6];
+};
+
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_SSR_REINIT_SUBSYSTEM
+  ------------------------------------------------------------------------*/
+/**
+ * struct host_event_wlan_css - Holds diag event details
+ * @status: Indicates the status of event
+ *
+ * This structure holds the host diag event related information
+ */
+struct host_event_wlan_ssr_reinit {
+	uint32_t status;
+};
+
+/*-------------------------------------------------------------------------
+  Event ID: EVENT_WLAN_SSR_SHUTDOWN_SUBSYSTEM
+  ------------------------------------------------------------------------*/
+/**
+ * struct host_event_wlan_ssr_shutdown - Holds diag event details
+ * @status: Indicates the status of event
+ *
+ * This structure holds the host diag event related information
+ */
+struct host_event_wlan_ssr_shutdown {
+	uint32_t status;
+};
+
+/*-------------------------------------------------------------------------
+  Function declarations and documenation
+  ------------------------------------------------------------------------*/
+/**
+ * enum_host_ssr_events - Enum containing ssr subtype
+ * @SSR_SUB_SYSTEM_REINIT: Indicate ssr reinit state
+ * @SSR_SUB_SYSTEM_SHUTDOWN: Indicate ssr shutdown status
+ *
+ */
+enum host_ssr_events {
+	SSR_SUB_SYSTEM_SHUTDOWN,
+	SSR_SUB_SYSTEM_REINIT,
+};
 
 /*-------------------------------------------------------------------------
   Function declarations and documenation
   ------------------------------------------------------------------------*/
 
+enum wifi_connectivity_events {
+	WIFI_EVENT_DRIVER_EAPOL_FRAME_TRANSMIT_REQUESTED,
+	WIFI_EVENT_DRIVER_EAPOL_FRAME_RECEIVED,
+};
+
+/**
+ * enum wake_lock_reason - Reason for taking wakelock
+ * @WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT: Driver initialization
+ * @WIFI_POWER_EVENT_WAKELOCK_DRIVER_REINIT: Driver re-initialization
+ * @WIFI_POWER_EVENT_WAKELOCK_DRIVER_EXIT: Driver shutdown
+ * @WIFI_POWER_EVENT_WAKELOCK_SCAN: Scan request/response handling
+ * @WIFI_POWER_EVENT_WAKELOCK_EXT_SCAN: Extended scan request/response handling
+ * @WIFI_POWER_EVENT_WAKELOCK_RESUME_WLAN: Driver resume
+ * @WIFI_POWER_EVENT_WAKELOCK_ROC: Remain on channel request/response handling
+ * @WIFI_POWER_EVENT_WAKELOCK_IPA: IPA related handling
+ * @WIFI_POWER_EVENT_WAKELOCK_ADD_STA: Addition of STA
+ * @WIFI_POWER_EVENT_WAKELOCK_HOLD_RX: Wakelocks taken for receive
+ * @WIFI_POWER_EVENT_WAKELOCK_SAP: SoftAP related wakelocks
+ * @WIFI_POWER_EVENT_WAKELOCK_WOW: WoW feature related
+ * @WIFI_POWER_EVENT_WAKELOCK_PNO: PNO feature related
+ * @WIFI_POWER_EVENT_WAKELOCK_DEL_STA: Deletion of a station
+ * @WIFI_POWER_EVENT_WAKELOCK_DFS: DFS related wakelocks
+ * @WIFI_POWER_EVENT_WAKELOCK_MISC: Miscellaneous wakelocks
+ *
+ * This enum has the reason codes why the wakelocks were taken/released
+ */
+enum wake_lock_reason {
+	WIFI_POWER_EVENT_WAKELOCK_DRIVER_INIT,
+	WIFI_POWER_EVENT_WAKELOCK_DRIVER_REINIT,
+	WIFI_POWER_EVENT_WAKELOCK_DRIVER_EXIT,
+	WIFI_POWER_EVENT_WAKELOCK_SCAN,
+	WIFI_POWER_EVENT_WAKELOCK_EXT_SCAN,
+	WIFI_POWER_EVENT_WAKELOCK_RESUME_WLAN,
+	WIFI_POWER_EVENT_WAKELOCK_ROC,
+	WIFI_POWER_EVENT_WAKELOCK_IPA,
+	WIFI_POWER_EVENT_WAKELOCK_ADD_STA,
+	WIFI_POWER_EVENT_WAKELOCK_HOLD_RX,
+	WIFI_POWER_EVENT_WAKELOCK_SAP,
+	WIFI_POWER_EVENT_WAKELOCK_WOW,
+	WIFI_POWER_EVENT_WAKELOCK_PNO,
+	WIFI_POWER_EVENT_WAKELOCK_DEL_STA,
+	WIFI_POWER_EVENT_WAKELOCK_DFS,
+	WIFI_POWER_EVENT_WAKELOCK_MISC,
+};
 
 #ifdef __cplusplus
 }

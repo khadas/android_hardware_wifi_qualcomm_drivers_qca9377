@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014,2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -39,6 +39,7 @@
 #include <adf_os_defer.h>
 #include <adf_os_atomic.h>
 #include <adf_nbuf.h>
+#include <vos_threads.h>
 #include <athdefs.h>
 #include <adf_net_types.h>
 #include <a_types.h>
@@ -51,6 +52,7 @@
 #include "regtable.h"
 #include "if_ath_sdio.h"
 
+#define NBUF_ALLOC_FAIL_WAIT_TIME 100
 
 static void HIFDevDumpRegisters(HIF_SDIO_DEVICE *pDev,
         MBOX_IRQ_PROC_REGISTERS *pIrqProcRegs,
@@ -291,12 +293,21 @@ static INLINE A_STATUS HIFDevRecvPacket(HIF_SDIO_DEVICE *pDev,
          paddedLength,
          pDev->MailBoxInfo.MboxAddresses[mboxIndex]));
 
+#ifdef HIF_SYNC_READ
     status = HIFSyncRead(pDev->HIFDevice,
                 pDev->MailBoxInfo.MboxAddresses[mboxIndex],
                 pPacket->pBuffer,
                 paddedLength,
                 (sync ? HIF_RD_SYNC_BLOCK_FIX : HIF_RD_ASYNC_BLOCK_FIX),
                 sync ? NULL : pPacket); /* pass the packet as the context to the HIF request */
+#else
+    status = HIFReadWrite(pDev->HIFDevice,
+                pDev->MailBoxInfo.MboxAddresses[mboxIndex],
+                pPacket->pBuffer,
+                paddedLength,
+                (sync ? HIF_RD_SYNC_BLOCK_FIX : HIF_RD_ASYNC_BLOCK_FIX),
+                sync ? NULL : pPacket); /* pass the packet as the context to the HIF request */
+#endif
 
     AR_DEBUG_PRINTF( ATH_DEBUG_RECV, ("EP%d, Seq:%d\n",
            ((HTC_FRAME_HDR*)pPacket->pBuffer)->EndpointID,
@@ -435,7 +446,9 @@ static INLINE A_STATUS HIFDevProcessTrailer(HIF_SDIO_DEVICE *pDev,
                     pBundledLookAheadRpt++;
                 }
 
-                *pNumLookAheads = i;
+                if (pNumLookAheads != NULL) {
+                    *pNumLookAheads = i;
+                }
             }
             break;
         default:
@@ -617,6 +630,12 @@ static A_STATUS HIFDevIssueRecvPacketBundle(HIF_SDIO_DEVICE *pDev,
     int bundleSpaceRemaining = 0;
     target = (HTC_TARGET *)pDev->pTarget;
 
+    if (!pSyncCompletionQueue) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR,
+                  ("%s: pSyncCompletionQueue is NULL\n", __func__));
+        return A_ERROR;
+    }
+
     if((HTC_PACKET_QUEUE_DEPTH(pRecvPktQueue) - HTC_MAX_MSG_PER_BUNDLE_RX) > 0){
         PartialBundle = TRUE;
         AR_DEBUG_PRINTF(ATH_DEBUG_WARN, ("%s, partial bundle detected num: %d, %d \n",
@@ -625,17 +644,18 @@ static A_STATUS HIFDevIssueRecvPacketBundle(HIF_SDIO_DEVICE *pDev,
 
     bundleSpaceRemaining = HTC_MAX_MSG_PER_BUNDLE_RX * target->TargetCreditSize;
     pPacketRxBundle = AllocateHTCBundleRxPacket(target);
-    /* weiguang.ruan add, check before use*/
-    if (pPacketRxBundle == NULL) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_ERROR, ("%s, no memory for pPacketRxBundle\n",__FUNCTION__));
+    if (!pPacketRxBundle) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("%s: pPacketRxBundle is NULL \n",
+            __FUNCTION__));
+        vos_sleep(NBUF_ALLOC_FAIL_WAIT_TIME);  /* 100 msec sleep */
         return A_NO_MEMORY;
     }
-
     pBundleBuffer = pPacketRxBundle->pBuffer;
 
     for(i = 0; !HTC_QUEUE_EMPTY(pRecvPktQueue) && i < HTC_MAX_MSG_PER_BUNDLE_RX; i++){
         pPacket = HTC_PACKET_DEQUEUE(pRecvPktQueue);
-        A_ASSERT(pPacket != NULL);
+        if (pPacket == NULL)
+            break;
         if (pPacket->PktInfo.AsRx.HTCRxFlags & HTC_RX_PKT_LAST_BUNDLED_PKT_HAS_ADDTIONAL_BLOCK)
             paddedLength = DEV_CALC_RECV_PADDED_LEN(pDev, pPacket->ActualLength)
                                                     + HIF_MBOX_BLOCK_SIZE;
@@ -663,12 +683,27 @@ static A_STATUS HIFDevIssueRecvPacketBundle(HIF_SDIO_DEVICE *pDev,
        HTC_PACKET_QUEUE_DEPTH(pSyncCompletionQueue), totalLength);
 #endif
 
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+    if (HTC_PACKET_QUEUE_DEPTH(pSyncCompletionQueue) <= HTC_MAX_MSG_PER_BUNDLE_RX)
+        target->rx_bundle_stats[HTC_PACKET_QUEUE_DEPTH(pSyncCompletionQueue) - 1]++;
+#endif
+
+
+#ifdef HIF_SYNC_READ
     status = HIFSyncRead(pDev->HIFDevice,
                 pDev->MailBoxInfo.MboxAddresses[(int)MailBoxIndex],
                 pBundleBuffer,
                 totalLength,
                 HIF_RD_SYNC_BLOCK_FIX,
                 NULL);
+#else
+    status = HIFReadWrite(pDev->HIFDevice,
+                pDev->MailBoxInfo.MboxAddresses[(int)MailBoxIndex],
+                pBundleBuffer,
+                totalLength,
+                HIF_RD_SYNC_BLOCK_FIX,
+                NULL);
+#endif
 
     if(status != A_OK){
         AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("%s, HIFSend Failed status:%d \n",__FUNCTION__, status));
@@ -791,6 +826,16 @@ A_STATUS HIFDevRecvMessagePendingHandler(HIF_SDIO_DEVICE *pDev,
                         &pktsFetched,
                         partialBundle);
                 if (A_FAILED(status)) {
+                    while (!HTC_QUEUE_EMPTY(&recvPktQueue)) {
+                        adf_nbuf_t netbuf;
+
+                        pPacket = HTC_PACKET_DEQUEUE(&recvPktQueue);
+                        if (pPacket == NULL)
+                            break;
+                        netbuf = (adf_nbuf_t) pPacket->pNetBufContext;
+                        if (netbuf)
+                            adf_nbuf_free(netbuf);
+                    }
                     break;
                 }
 
@@ -817,7 +862,8 @@ A_STATUS HIFDevRecvMessagePendingHandler(HIF_SDIO_DEVICE *pDev,
             if (0 == pktsFetched) {
                 /* dequeue one packet */
                 pPacket = HTC_PACKET_DEQUEUE(&recvPktQueue);
-                A_ASSERT(pPacket != NULL);
+                if (pPacket == NULL)
+                    break;
                 pPacket->Completion = NULL;
 
                 if (HTC_PACKET_QUEUE_DEPTH(&recvPktQueue) > 0) {
@@ -826,6 +872,10 @@ A_STATUS HIFDevRecvMessagePendingHandler(HIF_SDIO_DEVICE *pDev,
                 }
 #if DEBUG_BUNDLE
                 adf_os_print("Recv single packet, length %d.\n", pPacket->ActualLength);
+#endif
+
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+                target->rx_bundle_stats[0]++;
 #endif
 
                 /* go fetch the packet */
@@ -853,7 +903,8 @@ A_STATUS HIFDevRecvMessagePendingHandler(HIF_SDIO_DEVICE *pDev,
             adf_nbuf_t netbuf;
 
             pPacket = HTC_PACKET_DEQUEUE(&syncCompletedPktsQueue);
-            A_ASSERT(pPacket != NULL);
+            if (pPacket == NULL)
+                break;
 
             NumLookAheads = 0;
             status = HIFDevProcessRecvHeader(pDev, pPacket, lookAheads,
@@ -900,6 +951,9 @@ static A_STATUS HIFDevServiceCPUInterrupt(HIF_SDIO_DEVICE *pDev)
     A_UINT8 regBuffer[4];
 
     AR_DEBUG_PRINTF(ATH_DEBUG_IRQ, ("CPU Interrupt\n"));
+    if (pDev == NULL)
+       return A_ERROR;
+
     cpu_int_status = pDev->IrqProcRegisters.cpu_int_status
             & pDev->IrqEnableRegisters.cpu_int_status_enable;
     A_ASSERT(cpu_int_status);
@@ -1067,12 +1121,22 @@ static A_STATUS HIFDevProcessPendingIRQs(HIF_SDIO_DEVICE *pDev, A_BOOL *pDone,
             break;
         }
 
+
+#ifdef HIF_SYNC_READ
         status = HIFSyncRead(pDev->HIFDevice,
                     HOST_INT_STATUS_ADDRESS,
                     (A_UINT8 *) &pDev->IrqProcRegisters,
                     sizeof(pDev->IrqProcRegisters),
                     HIF_RD_SYNC_BYTE_INC,
                     NULL);
+#else
+        status = HIFReadWrite(pDev->HIFDevice,
+                    HOST_INT_STATUS_ADDRESS,
+                    (A_UINT8 *) &pDev->IrqProcRegisters,
+                    sizeof(pDev->IrqProcRegisters),
+                    HIF_RD_SYNC_BYTE_INC,
+                    NULL);
+#endif
 
         if (A_FAILED(status)) {
             break;

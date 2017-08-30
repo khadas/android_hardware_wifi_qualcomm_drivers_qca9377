@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011,2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -89,6 +89,10 @@ typedef __adf_os_size_t                adf_os_size_t;
 typedef __adf_os_off_t      adf_os_off_t;
 
 /**
+ * @brief abstraction for completion structure
+ */
+typedef __adf_os_comp_t     adf_os_comp_t;
+/**
  * @brief DMA mapping object.
  */
 typedef __adf_os_dma_map_t  adf_os_dma_map_t;
@@ -131,6 +135,9 @@ typedef struct adf_os_sglist{
     } sg_segs[ADF_OS_MAX_SGLIST];
 
 }adf_os_sglist_t;
+
+#define adf_print(args...) \
+	VOS_TRACE(VOS_MODULE_ID_ADF, VOS_TRACE_LEVEL_ERROR, ## args)
 
 /**
  *  @brief All operations specified below are performed from

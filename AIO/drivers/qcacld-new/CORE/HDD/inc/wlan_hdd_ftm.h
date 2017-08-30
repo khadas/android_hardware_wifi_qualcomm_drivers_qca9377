@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -57,10 +57,15 @@ typedef struct wlan_hdd_ftm_status_s
 int wlan_hdd_ftm_open(hdd_context_t *pHddCtx);
 int wlan_hdd_ftm_close(hdd_context_t *pHddCtx);
 
-#if defined(QCA_WIFI_2_0) && defined(QCA_WIFI_FTM) \
-    && !defined(QCA_WIFI_ISOC)
-VOS_STATUS wlan_hdd_ftm_testmode_cmd(void *data, int len);
+#if  defined(QCA_WIFI_FTM)
+VOS_STATUS wlan_hdd_ftm_testmode_cmd(void *data, int len, boolean from_qcmbr);
 int wlan_hdd_qcmbr_unified_ioctl(hdd_adapter_t *pAdapter, struct ifreq *ifr);
+VOS_STATUS hdd_ftm_start(hdd_context_t *pHddCtx);
+#else
+static inline VOS_STATUS hdd_ftm_start(hdd_context_t *pHddCtx)
+{
+	return VOS_STATUS_SUCCESS;
+}
 #endif
 
 #endif

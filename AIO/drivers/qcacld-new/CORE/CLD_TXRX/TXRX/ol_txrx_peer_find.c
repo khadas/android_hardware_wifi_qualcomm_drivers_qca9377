@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, 2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -367,7 +367,6 @@ ol_txrx_peer_find_add_id(
          * Peregrine/Rome has two peer id for each peer.
          */
         if (peer->peer_ids[0] == HTT_INVALID_PEER) {
-            TXRX_PRINT(TXRX_PRINT_LEVEL_ERR, "%s: Delete Peer %p\n", __func__, peer);
             ol_txrx_peer_unref_delete(peer);
         }
         if (ol_txrx_peer_find_add_id_to_obj(peer, peer_id)) {
@@ -488,7 +487,7 @@ ol_rx_peer_unmap_handler(
      * Remove a reference to the peer.
      * If there are no more references, delete the peer object.
      */
-    TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+    TXRX_PRINT(TXRX_PRINT_LEVEL_INFO1,
         "%s: Remove the ID %d reference to peer %p\n",
         __func__, peer_id, peer);
     ol_txrx_peer_unref_delete(peer);
@@ -523,20 +522,23 @@ ol_txrx_peer_find_display(ol_txrx_pdev_handle pdev, int indent)
 {
     int i, max_peers;
 
-    adf_os_print("%*speer map:\n", indent, " ");
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO_LOW,
+        "%*speer map:\n", indent, " ");
     max_peers = ol_cfg_max_peer_id(pdev->ctrl_pdev) + 1;
     for (i = 0; i < max_peers; i++) {
         if (pdev->peer_id_to_obj_map[i]) {
-            adf_os_print("%*sid %d -> %p\n",
+            VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO_LOW,
+                "%*sid %d -> %p\n",
                 indent+4, " ", i, pdev->peer_id_to_obj_map[i]);
         }
     }
-    adf_os_print("%*speer hash table:\n", indent, " ");
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO_LOW,
+        "%*speer hash table:\n", indent, " ");
     for (i = 0; i <= pdev->peer_hash.mask; i++) {
         if (!TAILQ_EMPTY(&pdev->peer_hash.bins[i])) {
             struct ol_txrx_peer_t *peer;
             TAILQ_FOREACH(peer, &pdev->peer_hash.bins[i], hash_list_elem) {
-                adf_os_print(
+                VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO_LOW,
                     "%*shash idx %d -> %p (%02x:%02x:%02x:%02x:%02x:%02x)\n",
                     indent+4, " ", i, peer,
                     peer->mac_addr.raw[0], peer->mac_addr.raw[1],

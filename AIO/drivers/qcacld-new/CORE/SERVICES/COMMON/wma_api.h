@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -54,9 +54,7 @@
 #include "aniGlobal.h"
 #include "a_types.h"
 #include "wmi_unified.h"
-#ifndef QCA_WIFI_ISOC
 #include "wlan_hdd_tgt_cfg.h"
-#endif
 #ifdef NOT_YET
 #include "htc_api.h"
 #endif
@@ -76,8 +74,11 @@ typedef enum {
     GEN_PARAM_DUMP_WATCHDOG,
     GEN_PARAM_CRASH_INJECT,
 #ifdef CONFIG_ATH_PCIE_ACCESS_DEBUG
-    GEN_PARAM_DUMP_PCIE_ACCESS_LOG
+    GEN_PARAM_DUMP_PCIE_ACCESS_LOG,
 #endif
+    GEN_PARAM_MODULATED_DTIM,
+    GEN_PARAM_CAPTURE_TSF,
+    GEN_PARAM_RESET_TSF_GPIO,
 } GEN_PARAM;
 
 #define VDEV_CMD 1
@@ -100,6 +101,8 @@ VOS_STATUS wma_close(v_VOID_t *vos_context);
 
 VOS_STATUS wma_wmi_service_close(v_VOID_t *vos_context);
 
+VOS_STATUS wma_wmi_work_close(v_VOID_t *vos_context);
+
 v_VOID_t wma_rx_ready_event(WMA_HANDLE handle, v_VOID_t *ev);
 
 v_VOID_t wma_rx_service_ready_event(WMA_HANDLE handle,
@@ -121,18 +124,19 @@ eHalStatus WMA_SetRegDomain(void * clientCtxt, v_REGDOMAIN_t regId,
 
 VOS_STATUS WMA_GetWcnssSoftwareVersion(v_PVOID_t pvosGCtx, tANI_U8 *pVersion,
                                        tANI_U32 versionBufferSize);
-#ifndef QCA_WIFI_ISOC
 int wma_suspend_target(WMA_HANDLE handle, int disable_target_intr);
 void wma_target_suspend_acknowledge(void *context);
-int wma_resume_target(WMA_HANDLE handle);
-int wma_disable_wow_in_fw(WMA_HANDLE handle);
+int wma_resume_target(WMA_HANDLE handle, int);
+int wma_disable_wow_in_fw(WMA_HANDLE handle, int);
 int wma_is_wow_mode_selected(WMA_HANDLE handle);
-int wma_enable_wow_in_fw(WMA_HANDLE handle);
+int wma_enable_wow_in_fw(WMA_HANDLE handle, int);
 bool wma_check_scan_in_progress(WMA_HANDLE handle);
-#ifdef FEATURE_WLAN_D0WOW
+#ifdef FEATURE_RUNTIME_PM
+int wma_runtime_suspend_req(WMA_HANDLE handle);
+int wma_runtime_resume_req(WMA_HANDLE handle);
+#endif
+
 int wma_get_client_count(WMA_HANDLE handle);
-#endif
-#endif
 int wma_set_peer_param(void *wma_ctx, u_int8_t *peer_addr, u_int32_t param_id,
 			u_int32_t param_value, u_int32_t vdev_id);
 #ifdef NOT_YET
@@ -141,12 +145,37 @@ VOS_STATUS wma_update_channel_list(WMA_HANDLE handle, void *scan_chan_info);
 
 u_int8_t *wma_get_vdev_address_by_vdev_id(u_int8_t vdev_id);
 
-#ifndef QCA_WIFI_ISOC
 void *wma_get_beacon_buffer_by_vdev_id(u_int8_t vdev_id,
 				       u_int32_t *buffer_size);
-#endif	/* QCA_WIFI_ISOC */
 
 int process_wma_set_command(int sessid, int paramid,
                                    int sval, int vpdev);
 tANI_U8 wma_getFwWlanFeatCaps(tANI_U8 featEnumValue);
+VOS_STATUS wma_set_cts2self_for_p2p_go(void *wda_handle,
+		u_int32_t cts2self_for_p2p_go);
+VOS_STATUS wma_set_mib_stats_enable(void *wda_handle, u_int32_t enable);
+
+#ifdef FEATURE_GREEN_AP
+void wma_setup_egap_support(struct hdd_tgt_cfg *tgt_cfg, WMA_HANDLE handle);
+void wma_register_egap_event_handle(WMA_HANDLE handle);
+VOS_STATUS wma_send_egap_conf_params(WMA_HANDLE handle,
+				     struct egap_conf_params *egap_params);
+#else
+static inline void wma_setup_egap_support(struct hdd_tgt_cfg *tgt_cfg,
+					  WMA_HANDLE handle) {}
+static inline void wma_register_egap_event_handle(WMA_HANDLE handle) {}
+static inline VOS_STATUS wma_send_egap_conf_params(WMA_HANDLE handle,
+				     struct egap_conf_params *egap_params)
+{
+	return VOS_STATUS_E_NOSUPPORT;
+}
+#endif
+
+extern int wma_scpc_event_handler(void *handle, u_int8_t *event, u_int32_t len);
+
+VOS_STATUS wma_set_tx_power_scale(uint8_t vdev_id, int value);
+VOS_STATUS wma_set_tx_power_scale_decr_db(uint8_t vdev_id, int value);
+
+void wma_tx_failure_cb(void *ctx, uint32_t num_msdu,
+		       uint8_t tid, uint32_t status);
 #endif

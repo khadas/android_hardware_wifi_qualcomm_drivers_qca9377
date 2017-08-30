@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -104,6 +104,8 @@ extern "C" {
 typedef enum {
     HTC_REQUEST_CREDIT,
     HTC_PROCESS_CREDIT_REPORT,
+    HTC_SUSPEND_ACK,
+    HTC_SUSPEND_NACK,
 } htc_credit_exchange_type;
 
 typedef struct {
@@ -145,6 +147,7 @@ typedef struct _HTC_ENDPOINT {
     HTC_ENDPOINT_STATS          EndPointStats;          /* endpoint statistics */
 #endif
     A_BOOL                      TxCreditFlowEnabled;
+    adf_os_spinlock_t           htc_endpoint_rx_lock;
 } HTC_ENDPOINT;
 
 #ifdef HTC_EP_STAT_PROFILING
@@ -181,7 +184,7 @@ typedef struct _HTC_TARGET {
     HTC_PACKET_QUEUE            ControlBufferTXFreeList;
     A_UINT8                     CtrlResponseBuffer[HTC_MAX_CONTROL_MESSAGE_LENGTH];
     int                         CtrlResponseLength;
-    adf_os_mutex_t              CtrlResponseValid;
+    adf_os_comp_t               CtrlResponseValid;
     A_BOOL                      CtrlResponseProcessing;
     int                         TotalTransmitCredits;
     HTC_SERVICE_TX_CREDIT_ALLOCATION ServiceTxAllocTable[HTC_MAX_SERVICE_ALLOC_ENTRIES];
@@ -200,6 +203,15 @@ typedef struct _HTC_TARGET {
     A_UINT32                    TX_comp_cnt;
     A_UINT8                     MaxMsgsPerHTCBundle;
     A_UINT16                    AltDataCreditSize;
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+    A_UINT32                    rx_bundle_stats[HTC_MAX_MSG_PER_BUNDLE_RX];
+    A_UINT32                    tx_bundle_stats[HTC_MAX_MSG_PER_BUNDLE_TX];
+#endif
+    /*
+    * This flag is from the mboxping tool. It indicates that we cannot drop it.
+    * Besides, nodrop pkts have higher priority than normal pkts.
+    */
+    A_BOOL                      is_nodrop_pkt;
 } HTC_TARGET;
 
 #define HTC_ENABLE_BUNDLE(target) (target->MaxMsgsPerHTCBundle > 1)
@@ -220,6 +232,8 @@ typedef struct _HTC_TARGET {
 #define UNLOCK_HTC_TX(t)        adf_os_spin_unlock_bh(&(t)->HTCTxLock);
 #define LOCK_HTC_CREDIT(t)      adf_os_spin_lock_bh(&(t)->HTCCreditLock);
 #define UNLOCK_HTC_CREDIT(t)    adf_os_spin_unlock_bh(&(t)->HTCCreditLock);
+#define LOCK_HTC_ENDPOINT_RX(t) adf_os_spin_lock_bh(&(t)->htc_endpoint_rx_lock);
+#define UNLOCK_HTC_ENDPOINT_RX(t) adf_os_spin_unlock_bh(&(t)->htc_endpoint_rx_lock);
 
 #define GET_HTC_TARGET_FROM_HANDLE(hnd) ((HTC_TARGET *)(hnd))
 
@@ -265,7 +279,10 @@ void        HTCProcessCreditRpt(HTC_TARGET        *target,
                                 HTC_ENDPOINT_ID    FromEndpoint);
 void        HTCFwEventHandler(void *context, A_STATUS status);
 void        HTCSendCompleteCheckCleanup(void *context);
+void        HTCTxResumeAllHandler(void *context);
 
+void htc_credit_record(htc_credit_exchange_type type, A_UINT32 tx_credit,
+                       A_UINT32 htc_tx_queue_depth);
 
 static inline void HTCSendCompletePollTimerStop(HTC_ENDPOINT *pEndpoint)
 {

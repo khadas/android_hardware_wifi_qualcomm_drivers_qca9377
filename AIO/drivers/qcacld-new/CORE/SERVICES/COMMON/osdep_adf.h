@@ -161,7 +161,7 @@ typedef unsigned long TQUEUE_ARG;
 #define mark_bh(a)
 
 #define ATH_SYSCTL_DECL(f, ctl, write, filp, buffer, lenp, ppos) \
-    f(ctl_table *ctl, int write, void *buffer,                   \
+    f(struct ctl_table *ctl, int write, void *buffer,                   \
         size_t *lenp, loff_t *ppos)
 #define ATH_SYSCTL_PROC_DOINTVEC(ctl, write, filp, buffer, lenp, ppos) \
     proc_dointvec(ctl, write, buffer, lenp, ppos)
@@ -641,7 +641,7 @@ typedef dma_addr_t * dma_context_t;
     (_arg) = (_type)(timer_arg)
 
 
-#define OS_INIT_TIMER(_osdev, _timer, _fn, _ctx)  adf_os_timer_init(_osdev, _timer, _fn, _ctx)
+#define OS_INIT_TIMER(_osdev, _timer, _fn, _ctx, type)  adf_os_timer_init(_osdev, _timer, _fn, _ctx, type)
 
 #define OS_SET_TIMER(_timer, _ms)      adf_os_timer_mod(_timer, _ms)
 
@@ -767,7 +767,8 @@ static INLINE int OS_MESGQ_INIT(osdev_t devhandle, os_mesg_queue_t *queue,
 #ifdef USE_SOFTINTR
 	queue->_task = softintr_establish(IPL_SOFTNET,os_mesgq_handler,(void *)queue);
 #else
-    OS_INIT_TIMER(devhandle,&queue->_timer, os_mesgq_handler, queue);
+    OS_INIT_TIMER(devhandle,&queue->_timer, os_mesgq_handler, queue,
+       ADF_DEFERRABLE_TIMER);
 #endif
 
     return 0;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -32,7 +32,10 @@
 #include <vos_getBin.h>
 #include "epping_main.h"
 
-#ifdef DEBUG
+/* HTC Control message receive timeout msec */
+#define HTC_CONTROL_RX_TIMEOUT     5000
+
+#ifdef WLAN_DEBUG
 void DebugDumpBytes(A_UCHAR *buffer, A_UINT16 length, char *pDescription)
 {
     A_CHAR stream[60];
@@ -101,14 +104,17 @@ static void DoRecvCompletion(HTC_ENDPOINT     *pEndpoint,
             /* using legacy EpRecv */
             while (!HTC_QUEUE_EMPTY(pQueueToIndicate)) {
                 pPacket = HTC_PACKET_DEQUEUE(pQueueToIndicate);
+                LOCK_HTC_ENDPOINT_RX(pEndpoint);
                 if (pEndpoint->EpCallBacks.EpRecv == NULL) {
                     AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("HTC ep %d has NULL recv callback on packet %p\n",
                             pEndpoint->Id, pPacket));
+                    UNLOCK_HTC_ENDPOINT_RX(pEndpoint);
                     continue;
                 }
                 AR_DEBUG_PRINTF(ATH_DEBUG_RECV, ("HTC calling ep %d recv callback on packet %p\n",
                         pEndpoint->Id, pPacket));
                 pEndpoint->EpCallBacks.EpRecv(pEndpoint->EpCallBacks.pContext, pPacket);
+                UNLOCK_HTC_ENDPOINT_RX(pEndpoint);
             }
         }
 
@@ -399,23 +405,35 @@ A_STATUS HTCRxCompletionHandler(
                      * on the endpoint 0 */
                     AR_DEBUG_PRINTF(ATH_DEBUG_ERR,("HTC Rx Ctrl still processing\n"));
                     status = A_ERROR;
+                    VOS_BUG(FALSE);
                     break;
                 }
 
                 LOCK_HTC_RX(target);
                 target->CtrlResponseLength = min((int)netlen,HTC_MAX_CONTROL_MESSAGE_LENGTH);
                 A_MEMCPY(target->CtrlResponseBuffer,netdata,target->CtrlResponseLength);
+
+                /* Requester will clear this flag */
+                target->CtrlResponseProcessing = TRUE;
                 UNLOCK_HTC_RX(target);
 
-                adf_os_mutex_release(target->osdev, &target->CtrlResponseValid);
+                adf_os_complete(&target->CtrlResponseValid);
                 break;
             case HTC_MSG_SEND_SUSPEND_COMPLETE:
                 wow_nack = 0;
+                LOCK_HTC_CREDIT(target);
+                htc_credit_record(HTC_SUSPEND_ACK, pEndpoint->TxCredits,
+                                  HTC_PACKET_QUEUE_DEPTH(&pEndpoint->TxQueue));
+                UNLOCK_HTC_CREDIT(target);
                 target->HTCInitInfo.TargetSendSuspendComplete((void *)&wow_nack);
                 HTCsuspendwow(target);
                 break;
             case HTC_MSG_NACK_SUSPEND:
                 wow_nack = 1;
+                LOCK_HTC_CREDIT(target);
+                htc_credit_record(HTC_SUSPEND_NACK, pEndpoint->TxCredits,
+                                  HTC_PACKET_QUEUE_DEPTH(&pEndpoint->TxQueue));
+                UNLOCK_HTC_CREDIT(target);
                 target->HTCInitInfo.TargetSendSuspendComplete((void *)&wow_nack);
                 break;
             }
@@ -552,8 +570,7 @@ void HTCFlushRxHoldQueue(HTC_TARGET *target, HTC_ENDPOINT *pEndpoint)
 void HTCRecvInit(HTC_TARGET *target)
 {
     /* Initialize CtrlResponseValid to block */
-    adf_os_init_mutex(&target->CtrlResponseValid);
-    adf_os_mutex_acquire(target->osdev, &target->CtrlResponseValid);
+    adf_os_init_completion(&target->CtrlResponseValid);
 }
 
 
@@ -564,40 +581,14 @@ A_STATUS HTCWaitRecvCtrlMessage(HTC_TARGET *target)
 
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC,("+HTCWaitCtrlMessageRecv\n"));
 
+    adf_os_re_init_completion(target->CtrlResponseValid);
     /* Wait for BMI request/response transaction to complete */
-    while (adf_os_mutex_acquire(target->osdev, &target->CtrlResponseValid)) {
+    if(!adf_os_wait_for_completion_timeout(&target->CtrlResponseValid,
+        adf_os_msecs_to_ticks(HTC_CONTROL_RX_TIMEOUT))) {
+        if(hif_set_target_reset(target->hif_dev))
+            VOS_BUG(0);
+        return A_ERROR;
     }
-
-    LOCK_HTC_RX(target);
-    /* caller will clear this flag */
-    target->CtrlResponseProcessing = TRUE;
-
-    UNLOCK_HTC_RX(target);
-
-#if 0
-    while (count > 0) {
-
-        LOCK_HTC_RX(target);
-
-        if (target->CtrlResponseValid) {
-            target->CtrlResponseValid = FALSE;
-                /* caller will clear this flag */
-            target->CtrlResponseProcessing = TRUE;
-            UNLOCK_HTC_RX(target);
-            break;
-        }
-
-        UNLOCK_HTC_RX(target);
-
-        count--;
-        A_MSLEEP(HTC_TARGET_RESPONSE_POLL_MS);
-    }
-
-    if (count <= 0) {
-        AR_DEBUG_PRINTF(ATH_DEBUG_ERR,("-HTCWaitCtrlMessageRecv: Timeout!\n"));
-        return A_ECOMM;
-    }
-#endif
 
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC,("-HTCWaitCtrlMessageRecv success\n"));
     return A_OK;

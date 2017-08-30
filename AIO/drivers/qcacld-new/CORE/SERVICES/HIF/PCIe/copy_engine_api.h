@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -169,7 +169,7 @@ unsigned int CE_sendlist_sizeof(void);
 void CE_sendlist_init(struct CE_sendlist *sendlist);
 
 /* Append a simple buffer (address/length) to a sendlist. */
-void CE_sendlist_buf_add(struct CE_sendlist *sendlist,
+int CE_sendlist_buf_add(struct CE_sendlist *sendlist,
                          CE_addr_t buffer,
                          unsigned int nbytes,
                          u_int32_t flags /* OR-ed with internal flags */);
@@ -373,6 +373,9 @@ void CE_enable_any_copy_compl_intr_nolock(struct hif_pci_softc *sc);
 
 /* API to check if any of the copy engine pipes has pending frames for prcoessing */
 bool CE_get_rx_pending(struct hif_pci_softc *sc);
+
+int get_next_record_index(atomic_t *table_index, int array_size);
+
 
 /* CE_attr.flags values */
 #define CE_ATTR_NO_SNOOP                0x01  /* Use NonSnooping PCIe accesses? */

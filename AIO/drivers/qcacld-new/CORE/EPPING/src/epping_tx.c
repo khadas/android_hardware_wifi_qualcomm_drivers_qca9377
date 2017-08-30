@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -20,12 +20,10 @@
  */
 
 /*
- * Copyright (c) 2014 Qualcomm Atheros, Inc.
- * All Rights Reserved.
- * Qualcomm Atheros Confidential and Proprietary.
- *
+ * This file was originally distributed by Qualcomm Atheros, Inc.
+ * under proprietary terms before Copyright ownership was assigned
+ * to the Linux Foundation.
  */
-
 
 /*========================================================================
 
@@ -45,10 +43,8 @@
 #include <linux/firmware.h>
 #include <wcnss_api.h>
 #include <wlan_hdd_tx_rx.h>
-#include <palTimer.h>
 #include <wniApi.h>
 #include <wlan_nlink_srv.h>
-#include <wlan_btc_svc.h>
 #include <wlan_hdd_cfg.h>
 #include <wlan_ptt_sock_svc.h>
 #include <wlan_hdd_wowl.h>
@@ -143,6 +139,11 @@ static int epping_tx_send_int(adf_nbuf_t skb,
    /* prepare ep/HTC information */
    ac = eppingHdr->StreamNo_h;
    eid = pAdapter->pEpping_ctx->EppingEndpoint[ac];
+   if (eid < 0 || eid >= EPPING_MAX_NUM_EPIDS) {
+      EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
+         "%s: invalid eid = %d, ac = %d\n", __func__, eid, ac);
+      return -1;
+   }
    if (tmpHdr.Cmd_h == EPPING_CMD_RESET_RECV_CNT ||
       tmpHdr.Cmd_h == EPPING_CMD_CONT_RX_START) {
       epping_set_kperf_flag(pAdapter, eid, tmpHdr.CmdBuffer_t[0]);
@@ -201,6 +202,7 @@ void epping_tx_timer_expire(epping_adapter_t *pAdapter)
 
    /* try to flush nodrop queue */
    while ((nodrop_skb = adf_nbuf_queue_remove(&pAdapter->nodrop_queue))) {
+      HTCSetNodropPkt(pAdapter->pEpping_ctx->HTCHandle, TRUE);
       if (epping_tx_send_int(nodrop_skb, pAdapter)) {
          EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
             "%s: nodrop: %p xmit fail in timer\n", __func__, nodrop_skb);
@@ -208,6 +210,7 @@ void epping_tx_timer_expire(epping_adapter_t *pAdapter)
          adf_nbuf_queue_insert_head(&pAdapter->nodrop_queue, nodrop_skb);
          break;
       } else {
+         HTCSetNodropPkt(pAdapter->pEpping_ctx->HTCHandle, FALSE);
          EPPING_LOG(VOS_TRACE_LEVEL_INFO,
             "%s: nodrop: %p xmit ok in timer\n", __func__, nodrop_skb);
       }
@@ -266,6 +269,7 @@ int epping_tx_send(adf_nbuf_t skb, epping_adapter_t *pAdapter)
 
    /* check the nodrop queue first */
    while ((nodrop_skb = adf_nbuf_queue_remove(&pAdapter->nodrop_queue))) {
+      HTCSetNodropPkt(pAdapter->pEpping_ctx->HTCHandle, TRUE);
       if (epping_tx_send_int(nodrop_skb, pAdapter)) {
          EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
             "%s: nodrop: %p xmit fail\n", __func__, nodrop_skb);
@@ -274,6 +278,7 @@ int epping_tx_send(adf_nbuf_t skb, epping_adapter_t *pAdapter)
          /* no cookie so free the current skb */
          goto tx_fail;
       } else {
+         HTCSetNodropPkt(pAdapter->pEpping_ctx->HTCHandle, FALSE);
          EPPING_LOG(VOS_TRACE_LEVEL_INFO,
             "%s: nodrop: %p xmit ok\n", __func__, nodrop_skb);
       }
@@ -313,11 +318,11 @@ tx_fail:
 HTC_SEND_FULL_ACTION epping_tx_queue_full(void *Context,
    HTC_PACKET *pPacket)
 {
-   epping_context_t *pEpping_ctx = (epping_context_t *)Context;
-   epping_adapter_t *pAdapter = pEpping_ctx->epping_adapter;
-   HTC_SEND_FULL_ACTION action = HTC_SEND_FULL_KEEP;
-   netif_stop_queue(pAdapter->dev);
-   return action;
+   /*
+   * Call netif_stop_queue frequently will impact the mboxping tx t-put.
+   * Return HTC_SEND_FULL_KEEP directly in epping_tx_queue_full to avoid.
+   */
+   return HTC_SEND_FULL_KEEP;
 }
 #endif /* HIF_SDIO */
 void epping_tx_complete_multiple(void *ctx,
@@ -340,20 +345,35 @@ void epping_tx_complete_multiple(void *ctx,
 
    while (!HTC_QUEUE_EMPTY(pPacketQueue)) {
       htc_pkt = HTC_PACKET_DEQUEUE(pPacketQueue);
+      if (htc_pkt == NULL)
+         break;
       status=htc_pkt->Status;
       eid=htc_pkt->Endpoint;
       pktSkb=GET_HTC_PACKET_NET_BUF_CONTEXT(htc_pkt);
       cookie = htc_pkt->pPktContext;
 
-      ASSERT(pktSkb);
-      ASSERT(htc_pkt->pBuffer == adf_nbuf_data(pktSkb));
+      if (!pktSkb) {
+         EPPING_LOG(VOS_TRACE_LEVEL_ERROR,
+            "%s: pktSkb is NULL", __func__);
+         ASSERT(0);
+      } else {
+         if (htc_pkt->pBuffer != adf_nbuf_data(pktSkb)) {
+            EPPING_LOG(VOS_TRACE_LEVEL_ERROR,
+               "%s: htc_pkt buffer not equal to skb->data", __func__);
+            ASSERT(0);
+         }
 
-      /* add this to the list, use faster non-lock API */
-      adf_nbuf_queue_add(&skb_queue,pktSkb);
+         /* add this to the list, use faster non-lock API */
+         adf_nbuf_queue_add(&skb_queue,pktSkb);
 
-      if (A_SUCCESS(status)) {
-         ASSERT(htc_pkt->ActualLength == adf_nbuf_len(pktSkb));
+         if (A_SUCCESS(status))
+            if (htc_pkt->ActualLength != adf_nbuf_len(pktSkb)) {
+               EPPING_LOG(VOS_TRACE_LEVEL_ERROR,
+                  "%s: htc_pkt length not equal to skb->len", __func__);
+               ASSERT(0);
+            }
       }
+
       EPPING_LOG(VOS_TRACE_LEVEL_INFO,
          "%s skb=%p data=%p len=0x%x eid=%d ",
          __func__, pktSkb, htc_pkt->pBuffer,
@@ -382,7 +402,9 @@ void epping_tx_complete_multiple(void *ctx,
    while (adf_nbuf_queue_len(&skb_queue)) {
       /* use non-lock version */
       pktSkb = adf_nbuf_queue_remove(&skb_queue);
-      adf_nbuf_free(pktSkb);
+      if (pktSkb == NULL)
+         break;
+      adf_nbuf_tx_free(pktSkb, ADF_NBUF_PKT_ERROR);
       pEpping_ctx->total_tx_acks++;
    }
 

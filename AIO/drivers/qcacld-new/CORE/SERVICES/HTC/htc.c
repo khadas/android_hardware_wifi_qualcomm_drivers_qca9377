@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013, 2014, 2015 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -36,7 +36,9 @@
 #include "epping_main.h"
 #include "htc_api.h"
 
-#ifdef DEBUG
+#define MAX_HTC_RX_BUNDLE  2
+
+#ifdef WLAN_DEBUG
 static ATH_DEBUG_MASK_DESCRIPTION g_HTCDebugDescription[] = {
     { ATH_DEBUG_SEND , "Send"},
     { ATH_DEBUG_RECV , "Recv"},
@@ -144,9 +146,13 @@ static void HTCCleanup(HTC_TARGET *target)
 {
     HTC_PACKET *pPacket;
     adf_nbuf_t netbuf;
+    int j;
 
     if (target->hif_dev != NULL) {
         HIFDetachHTC(target->hif_dev);
+#ifdef HIF_SDIO
+        HIFMaskInterrupt(target->hif_dev);
+#endif
         target->hif_dev = NULL;
     }
 
@@ -204,6 +210,11 @@ static void HTCCleanup(HTC_TARGET *target)
     adf_os_spinlock_destroy(&target->HTCTxLock);
     adf_os_spinlock_destroy(&target->HTCCreditLock);
 
+    for (j = 0; j < ENDPOINT_MAX; j++) {
+        HTC_ENDPOINT *endpoint = &target->EndPoint[j];
+        adf_os_spinlock_destroy(&endpoint->htc_endpoint_rx_lock);
+    }
+
     /* free our instance */
     A_FREE(target);
 }
@@ -215,7 +226,7 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
     MSG_BASED_HIF_CALLBACKS htcCallbacks;
     HTC_ENDPOINT            *pEndpoint=NULL;
     HTC_TARGET              *target = NULL;
-    int                     i;
+    int                     i, j;
 
     AR_DEBUG_PRINTF(ATH_DEBUG_INFO, ("+HTCCreate ..  HIF :%p \n",hHIF));
 
@@ -232,6 +243,12 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
     adf_os_spinlock_init(&target->HTCRxLock);
     adf_os_spinlock_init(&target->HTCTxLock);
     adf_os_spinlock_init(&target->HTCCreditLock);
+
+    for (j = 0; j < ENDPOINT_MAX; j++) {
+        pEndpoint = &target->EndPoint[j];
+        adf_os_spinlock_init(&pEndpoint->htc_endpoint_rx_lock);
+    }
+    target->is_nodrop_pkt = FALSE;
 
     do {
         A_MEMCPY(&target->HTCInitInfo,pInfo,sizeof(HTC_INIT_INFO));
@@ -267,6 +284,7 @@ HTC_HANDLE HTCCreate(void *ol_sc, HTC_INIT_INFO *pInfo, adf_os_device_t osdev)
         htcCallbacks.txCompletionHandler = HTCTxCompletionHandler;
         htcCallbacks.txResourceAvailHandler = HTCTxResourceAvailHandler;
         htcCallbacks.fwEventHandler = HTCFwEventHandler;
+        htcCallbacks.txResumeAllHandler = HTCTxResumeAllHandler;
         target->hif_dev = hHIF;
 
         /* Get HIF default pipe for HTC message exchange */
@@ -288,6 +306,7 @@ void  HTCDestroy(HTC_HANDLE HTCHandle)
 {
     HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(HTCHandle);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("+HTCDestroy ..  Destroying :0x%p \n",target));
+    HIFStop(HTCGetHifDevice(HTCHandle));
     HTCCleanup(target);
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("-HTCDestroy \n"));
 }
@@ -517,6 +536,8 @@ A_STATUS HTCWaitTarget(HTC_HANDLE HTCHandle)
     HTC_SERVICE_CONNECT_RESP resp;
     HTC_READY_MSG *rdy_msg;
     A_UINT16 htc_rdy_msg_id;
+    A_UINT8 i = 0;
+    HTC_PACKET *pRxBundlePacket, *pTempBundlePacket;
 
     AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("HTCWaitTarget - Enter (target:0x%p) \n", HTCHandle));
     AR_DEBUG_PRINTF(ATH_DEBUG_ANY, ("+HWT\n"));
@@ -571,6 +592,20 @@ A_STATUS HTCWaitTarget(HTC_HANDLE HTCHandle)
             status = A_ECOMM;
             break;
         }
+
+        /* Allocate expected number of RX bundle buffer allocation */
+        pTempBundlePacket = NULL;
+        for (i = 0; i < MAX_HTC_RX_BUNDLE; i++) {
+            pRxBundlePacket = AllocateHTCBundleRxPacket(target);
+            if (pRxBundlePacket != NULL) {
+                pRxBundlePacket->ListLink.pNext = (DL_LIST *)pTempBundlePacket;
+            } else {
+                break;
+            }
+            pTempBundlePacket = pRxBundlePacket;
+        }
+        target->pBundleFreeRxList = pTempBundlePacket;
+
             /* done processing */
         target->CtrlResponseProcessing = FALSE;
 
@@ -947,3 +982,72 @@ void HTCIpaGetCEResource(HTC_HANDLE htc_handle,
 }
 #endif /* IPA_UC_OFFLOAD */
 
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+
+void HTCDumpBundleStats(HTC_HANDLE HTCHandle)
+{
+    HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(HTCHandle);
+    int total, i;
+
+    total = 0;
+    for (i = 0; i < HTC_MAX_MSG_PER_BUNDLE_RX; i++) {
+        total += target->rx_bundle_stats[i];
+    }
+
+    if (total) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,("RX Bundle stats:\n"));
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,("Total RX packets: %d\n", total));
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,(
+            "Number of bundle: Number of packets\n"));
+        for (i = 0; i < HTC_MAX_MSG_PER_BUNDLE_RX; i++) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ANY,
+                ("%10d:%10d(%2d%s)\n",(i+1), target->rx_bundle_stats[i],
+                ((target->rx_bundle_stats[i]*100)/total), "%"));
+        }
+    }
+
+
+    total = 0;
+    for (i = 0; i < HTC_MAX_MSG_PER_BUNDLE_TX; i++) {
+        total += target->tx_bundle_stats[i];
+    }
+
+    if (total) {
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,("TX Bundle stats:\n"));
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,("Total TX packets: %d\n", total));
+        AR_DEBUG_PRINTF(ATH_DEBUG_ANY,
+            ("Number of bundle: Number of packets\n"));
+        for (i = 0; i < HTC_MAX_MSG_PER_BUNDLE_TX; i++) {
+            AR_DEBUG_PRINTF(ATH_DEBUG_ANY,
+                ("%10d:%10d(%2d%s)\n",(i+1), target->tx_bundle_stats[i],
+                ((target->tx_bundle_stats[i]*100)/total), "%"));
+        }
+    }
+}
+
+void HTCClearBundleStats (HTC_HANDLE HTCHandle)
+{
+    HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(HTCHandle);
+
+    adf_os_mem_zero(&target->rx_bundle_stats, sizeof(target->rx_bundle_stats));
+    adf_os_mem_zero(&target->tx_bundle_stats, sizeof(target->tx_bundle_stats));
+}
+#endif
+
+#ifdef FEATURE_RUNTIME_PM
+int htc_pm_runtime_get(HTC_HANDLE htc_handle)
+{
+	HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(htc_handle);
+
+	AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("%s: %pS\n", __func__, (void *)_RET_IP_));
+	return hif_pm_runtime_get(target->hif_dev);
+}
+
+int htc_pm_runtime_put(HTC_HANDLE htc_handle)
+{
+	HTC_TARGET *target = GET_HTC_TARGET_FROM_HANDLE(htc_handle);
+
+	AR_DEBUG_PRINTF(ATH_DEBUG_TRC, ("%s: %pS\n", __func__, (void *)_RET_IP_));
+	return hif_pm_runtime_put(target->hif_dev);
+}
+#endif

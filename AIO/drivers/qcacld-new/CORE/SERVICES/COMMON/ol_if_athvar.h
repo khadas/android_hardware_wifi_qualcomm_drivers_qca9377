@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -44,14 +44,7 @@
 #include "ol_txrx_osif_api.h"
 #include "ol_params.h"
 #include <wdi_event_api.h>
-
-#ifdef CONFIG_CNSS
-#include <net/cnss.h>
-#endif
-
-#ifdef QCA_WIFI_ISOC
-#include "dmux_dxe_api.h"
-#endif
+#include "vos_cnss.h"
 
 #include "ol_ctrl_addba_api.h"
 typedef void * hif_handle_t;
@@ -92,15 +85,26 @@ enum ol_ath_tx_ecodes  {
 } ;
 
 #ifdef HIF_SDIO
-#define MAX_FILE_NAME     20
+#define MAX_FILE_NAME	NAME_MAX
 struct ol_fw_files {
     char image_file[MAX_FILE_NAME];
+    char ibss_image_file[MAX_FILE_NAME];
     char board_data[MAX_FILE_NAME];
     char otp_data[MAX_FILE_NAME];
     char utf_file[MAX_FILE_NAME];
     char utf_board_data[MAX_FILE_NAME];
     char setup_file[MAX_FILE_NAME];
+    char epping_file[MAX_FILE_NAME];
 };
+#endif
+
+#ifdef QCA_ARP_SPOOFING_WAR
+enum {
+    RX_INTRA_BSS_FWD,
+    FILTER_NONE
+};
+
+typedef int (*hdd_filter_cb_t)(u_int32_t, adf_nbuf_t, u_int32_t);
 #endif
 
 #ifndef ATH_CAP_DCS_CWIM
@@ -270,16 +274,29 @@ struct ol_softc {
     u_int32_t               set_ht_vht_ies:1; /* true if vht ies are set on target */
     bool                    scn_cwmenable;    /*CWM enable/disable state*/
     u_int8_t                max_no_of_peers;
-#ifdef CONFIG_CNSS
+#ifdef HIF_PCI
     struct cnss_fw_files fw_files;
 #elif defined(HIF_SDIO)
     struct ol_fw_files fw_files;
 #endif
 #if defined(CONFIG_CNSS) || defined(HIF_SDIO)
-    void __iomem *ramdump_base;
+    void *ramdump_base;
     unsigned long ramdump_address;
     unsigned long ramdump_size;
 #endif
+    bool enable_self_recovery;
+#ifdef WLAN_FEATURE_LPSS
+    bool                    enablelpasssupport;
+#endif
+    bool                    enableRamdumpCollection;
+#ifdef FEATURE_RUNTIME_PM
+    bool enable_runtime_pm;
+    u_int32_t runtime_pm_delay;
+#endif
+#ifdef FEATURE_SECURE_FIRMWARE
+    bool enable_fw_hash_check;
+#endif
+    uint16_t board_id;
 };
 
 #ifdef PERE_IP_HDR_ALIGNMENT_WAR
@@ -314,9 +331,6 @@ struct ol_ath_vap_net80211 {
 
 struct ol_ath_node_net80211 {
     ol_txrx_peer_handle         an_txrx_handle;    /* ol data path handle */
-#ifdef QCA_WIFI_ISOC
-    ol_ctrl_addba_handle        an_ctrl_addba_handle;
-#endif /* QCA_WIFI_ISOC */
 };
 
 #define OL_ATH_NODE_NET80211(_ni)      ((struct ol_ath_node_net80211 *)(_ni))

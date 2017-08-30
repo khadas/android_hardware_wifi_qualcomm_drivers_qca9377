@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -44,22 +44,70 @@
 #include <net/netlink.h>
 #include <wlan_nlink_common.h>
 
+#define INVALID_PID -1
 #define NLINK_MAX_CALLBACKS (WLAN_NL_MSG_MAX - WLAN_NL_MSG_BASE)
 
 typedef int (* nl_srv_msg_callback)(struct sk_buff * skb);
 
-int nl_srv_init(void);
-#ifdef WLAN_KD_READY_NOTIFIER
-void nl_srv_exit(int dst_pid);
-#else
+/*
+ * If MULTI_IF_NAME is not defined, then this is the primary instance of the
+ * driver and the diagnostics netlink socket will be available. If
+ * MULTI_IF_NAME is defined then this is not the primary instance of the driver
+ * and the diagnotics netlink socket will not be available since this
+ * diagnostics netlink socket can only be exposed by one instance of the driver.
+ */
+
+#if defined(CONFIG_CNSS_LOGGER) || !defined(MULTI_IF_NAME)
+
+int nl_srv_init(void *wiphy);
 void nl_srv_exit(void);
-#endif /* WLAN_KD_READY_NOTIFIER */
-int nl_srv_register(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler);
-int nl_srv_unregister(tWlanNlModTypes msg_type, nl_srv_msg_callback msg_handler);
-int nl_srv_ucast(struct sk_buff * skb, int dst_pid, int flag);
-int nl_srv_bcast(struct sk_buff * skb);
-#ifdef WLAN_KD_READY_NOTIFIER
-void nl_srv_nl_ready_indication(void);
-void nl_srv_nl_close_indication(int pid);
-#endif /* WLAN_KD_READY_NOTIFIER */
+int nl_srv_register(tWlanNlModTypes msg_type,
+		    nl_srv_msg_callback msg_handler);
+int nl_srv_unregister(tWlanNlModTypes msg_type,
+		       nl_srv_msg_callback msg_handler);
+
+#ifdef CNSS_GENL
+int nl_srv_ucast(struct sk_buff *skb, int dst_pid, int flag,
+			int app_id, int mcgroup_id);
+int nl_srv_bcast(struct sk_buff *skb, int mcgroup_id, int app_id);
+#else
+int nl_srv_ucast(struct sk_buff *skb, int dst_pid, int flag);
+int nl_srv_bcast(struct sk_buff *skb);
+#endif
+int nl_srv_is_initialized(void);
+
+#else
+static inline int nl_srv_init(void *wiphy) { return 0; }
+static inline void nl_srv_exit(void) {}
+
+static inline int nl_srv_register(tWlanNlModTypes msg_type,
+				  nl_srv_msg_callback msg_handler)
+{
+	return 0;
+}
+
+static inline int nl_srv_unregister(tWlanNlModTypes msg_type,
+				    nl_srv_msg_callback msg_handler)
+{
+	return 0;
+}
+
+static inline int nl_srv_ucast(struct sk_buff *skb, int dst_pid, int flag)
+{
+	dev_kfree_skb(skb);
+	return 0;
+}
+
+static inline int nl_srv_bcast(struct sk_buff *skb)
+{
+	dev_kfree_skb(skb);
+	return 0;
+}
+
+static inline int nl_srv_is_initialized(void)
+{
+	return -EPERM;
+}
+
+#endif /* defined(CONFIG_CNSS_LOGGER) || !defined(MULTI_IF_NAME) */
 #endif

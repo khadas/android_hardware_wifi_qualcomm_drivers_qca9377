@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -28,7 +28,7 @@
 #if !defined( __LIM_SESSION_H )
 #define __LIM_SESSION_H
 
-
+#include "lim_fils_defs.h"
 /**=========================================================================
 
   \file  limSession.h
@@ -52,6 +52,21 @@ typedef struct sPowersaveoffloadInfo
     tPowersaveState psstate;
     tANI_U8 bcnmiss;
 }tPowersaveoffloadInfo, tpPowersaveoffloadInfo;
+
+#ifdef WLAN_FEATURE_11W
+/*
+ * This struct is needed for handling of ASSOC RSP with TRY AGAIN LATER
+ * It stores the context and state machine setting for MLM so that it can
+ * go back send ASSOC REQ frame again after the timer has expired.
+ */
+typedef struct tagComebackTimerInfo
+{
+    tpAniSirGlobal   pMac;
+    tANI_U8          sessionID;
+    tLimMlmStates    limPrevMlmState;   /* Previous MLM State */
+    tLimSmeStates    limMlmState;       /* MLM State */
+} tComebackTimerInfo;
+#endif /* WLAN_FEATURE_11W */
 
 /*--------------------------------------------------------------------------
   Include Files
@@ -91,7 +106,7 @@ typedef struct sPESession           // Added to Support BT-AMP
 {
     /* To check session table is in use or free*/
     tANI_U8                 available;
-    tANI_U8                 peSessionId;
+    tANI_U16                peSessionId;
     tANI_U8                 smeSessionId;
     tANI_U16                transactionId;
 
@@ -111,6 +126,8 @@ typedef struct sPESession           // Added to Support BT-AMP
     tANI_U8                 operMode;               // AP - 0; STA - 1 ;
     tSirNwType              nwType;
     tpSirSmeStartBssReq     pLimStartBssReq;        //handle to smestart bss req
+    bool                    osen_association;
+    bool                    wps_registration;
     tpSirSmeJoinReq         pLimJoinReq;            // handle to sme join req
     tpSirSmeJoinReq         pLimReAssocReq;         //handle to sme reassoc req
     tpLimMlmJoinReq         pLimMlmJoinReq;         //handle to MLM join Req
@@ -156,22 +173,19 @@ typedef struct sPESession           // Added to Support BT-AMP
     // Assoc or ReAssoc Response Data/Frame
     void                   *limAssocResponseData;
 
-
-
     /** BSS Table parameters **/
 
-
     /*
-    * staId:  Start BSS: this is the  Sta Id for the BSS.
-                 Join: this is the selfStaId
-      In both cases above, the peer STA ID wll be stored in dph hash table.
-    */
+     * staId:  Start BSS: this is the  Sta Id for the BSS.
+     * Join: this is the selfStaId
+     * In both cases above, the peer STA ID wll be stored in dph hash table.
+     */
     tANI_U16                staId;
-    tANI_U16                statypeForBss;          //to know session is for PEER or SELF
+    tANI_U16                statypeForBss; //to know session is for PEER or SELF
     tANI_U8                 shortSlotTimeSupported;
     tANI_U8                 dtimPeriod;
-    tSirMacRateSet       rateSet;
-    tSirMacRateSet       extRateSet;
+    tSirMacRateSet          rateSet;
+    tSirMacRateSet          extRateSet;
     tSirMacHTOperatingMode  htOperMode;
     tANI_U8                 currentOperChannel;
     tANI_U8                 currentReqChannel;
@@ -340,11 +354,12 @@ typedef struct sPESession           // Added to Support BT-AMP
     tANI_U8    htSmpsvalue;
     tANI_U8            spectrumMgtEnabled;
     /* *********************11H related*****************************/
-    //tANI_U32           gLim11hEnable;
     tLimSpecMgmtInfo   gLimSpecMgmt;
     // CB Primary/Secondary Channel Switch Info
     tLimChannelSwitchInfo  gLimChannelSwitch;
     /* *********************End 11H related*****************************/
+
+    uint8_t    lim_sub20_channel_switch_bandwidth;
 
     /*Flag to Track Status/Indicate HBFailure on this session */
     tANI_BOOLEAN LimHBFailureStatus;
@@ -362,6 +377,8 @@ typedef struct sPESession           // Added to Support BT-AMP
     tANI_U16  gLimNumOfCurrentSTAs;
 #ifdef FEATURE_WLAN_TDLS
     tANI_U32  peerAIDBitmap[2];
+    bool tdls_prohibited;
+    bool tdls_chan_swit_prohibited;
 #endif
     tANI_BOOLEAN fWaitForProbeRsp;
     tANI_BOOLEAN fIgnoreCapsChange;
@@ -369,7 +386,7 @@ typedef struct sPESession           // Added to Support BT-AMP
 #ifdef FEATURE_WLAN_DIAG_SUPPORT_LIM
     tANI_S8 rssi;
 #endif
-    tANI_U8 isAmsduSupportInAMPDU;
+    tANI_U8 max_amsdu_num;
     tANI_U8 isCoalesingInIBSSAllowed;
 
     tSirHTConfig htConfig;
@@ -451,6 +468,17 @@ typedef struct sPESession           // Added to Support BT-AMP
 #ifdef WLAN_FEATURE_ROAM_OFFLOAD
     tANI_BOOLEAN bRoamSynchInProgress;
 #endif
+
+#if defined WLAN_FEATURE_VOWIFI_11R
+    /* Fast Transition (FT) */
+    tftPEContext  ftPEContext;
+#endif
+    tANI_BOOLEAN            isNonRoamReassoc;
+#ifdef WLAN_FEATURE_11W
+    vos_timer_t pmfComebackTimer;
+    tComebackTimerInfo pmfComebackTimerInfo;
+#endif /* WLAN_FEATURE_11W */
+    tANI_U8  isKeyInstalled;
     /* timer for reseting protection fileds at regular intervals */
     vos_timer_t protection_fields_reset_timer;
     void *mac_ctx;
@@ -459,10 +487,40 @@ typedef struct sPESession           // Added to Support BT-AMP
      * gLimOlbcParams, gLimOverlap11gParams, gLimOverlapHt20Params etc
      */
     tANI_U16 old_protection_state;
-}tPESession, *tpPESession;
-
-#define LIM_MAX_ACTIVE_SESSIONS 4
-
+    tSirMacAddr             prev_ap_bssid;
+#ifdef FEATURE_AP_MCC_CH_AVOIDANCE
+    /* tells if Q2Q IE, from another MDM device in AP MCC mode was recvd */
+    bool sap_advertise_avoid_ch_ie;
+#endif /* FEATURE_AP_MCC_CH_AVOIDANCE */
+    uint8_t sap_dot11mc;
+#ifdef FEATURE_WLAN_ESE
+    uint8_t is_ese_version_ie_present;
+#endif
+    /* flag to indicate country code in beacon */
+    tANI_U8 countryInfoPresent;
+    uint8_t vdev_nss;
+    bool roaming_in_progress;
+    bool add_bss_failed;
+    /* Supported NSS is intersection of self and peer NSS */
+    bool supported_nss_1x1;
+    bool is_ext_caps_present;
+    bool is_vendor_specific_vhtcaps;
+    uint8_t vendor_specific_vht_ie_type;
+    uint8_t vendor_specific_vht_ie_sub_type;
+    bool vendor_vht_for_24ghz_sap;
+    uint16_t beacon_tx_rate;
+    uint8_t *access_policy_vendor_ie;
+    uint8_t access_policy;
+    uint8_t sap_sub20_channelwidth;
+    uint8_t sub20_channelwidth;
+    uint8_t vht_channel_width;
+    /* Number of STAs that do not support ECSA capability */
+    uint8_t lim_non_ecsa_cap_num;
+    uint32_t sta_auth_retries_for_code17;
+#ifdef WLAN_FEATURE_FILS_SK
+    struct pe_fils_session *fils_info;
+#endif
+} tPESession, *tpPESession;
 
 /*-------------------------------------------------------------------------
   Function declarations and documenation
@@ -589,16 +647,29 @@ tpPESession peFindSessionByPeerSta(tpAniSirGlobal pMac, tANI_U8*  sa, tANI_U8* s
   --------------------------------------------------------------------------*/
 void peDeleteSession(tpAniSirGlobal pMac, tpPESession psessionEntry);
 
+/**
+ * pe_find_session_by_sme_session_id() - looks up the PE session for given sme
+ * session id
+ * @mac_ctx:          pointer to global adapter context
+ * @sme_session_id:   sme session id
+ *
+ * looks up the PE session for given sme session id
+ *
+ * Return: pe session entry for given sme session if found else NULL
+ */
+tpPESession pe_find_session_by_sme_session_id(tpAniSirGlobal mac_ctx,
+					   uint8_t sme_session_id);
+uint8_t pe_count_session_with_sme_session_id(tpAniSirGlobal mac_ctx,
+	uint8_t sme_session_id);
 
-/*--------------------------------------------------------------------------
-  \brief peDeleteSession() - Returns the SME session ID and Transaction ID .
-
-
-  \param pMac                   - pointer to global adapter context
-  \param sessionId             -session ID of the session which needs to be deleted.
-
-  \sa
-  --------------------------------------------------------------------------*/
-
-
+int pe_get_active_session_count(tpAniSirGlobal mac_ctx);
+#ifdef WLAN_FEATURE_FILS_SK
+/**
+ * pe_delete_fils_info: API to delete fils session info
+ * @session: pe session
+ *
+ * Return: void
+ */
+void pe_delete_fils_info(tpPESession session);
+#endif
 #endif //#if !defined( __LIM_SESSION_H )

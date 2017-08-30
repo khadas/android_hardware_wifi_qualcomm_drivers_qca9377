@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014,2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -79,6 +79,7 @@ void vos_trace_display(void);
 
 void vos_trace_setValue( VOS_MODULE_ID module, VOS_TRACE_LEVEL level, v_U8_t on );
 
+void vos_trace_set_module_trace_level(VOS_MODULE_ID module, uint32_t level);
 
 // VOS_TRACE is the macro invoked to add trace messages to code.  See the
 // documenation for vos_trace_msg() for the parameters etc. for this function.
@@ -101,6 +102,7 @@ void vos_trace_setValue( VOS_MODULE_ID module, VOS_TRACE_LEVEL level, v_U8_t on 
 void __printf(3,4) vos_snprintf(char *strBuffer, unsigned  int size,
                                 char *strFormat, ...);
 #define VOS_SNPRINTF vos_snprintf
+#define vos_scnprintf scnprintf
 
 #ifdef VOS_ENABLE_TRACING
 
@@ -125,8 +127,8 @@ void __printf(3,4) vos_snprintf(char *strBuffer, unsigned  int size,
 #endif
 
 #ifdef PANIC_ON_BUG
-#ifdef CONFIG_X86
-/* BUG_ON does not call panic on x86,so call panic directly */
+#if defined(CONFIG_X86) || defined(MDM_PLATFORM)
+/* BUG_ON does not call panic on x86 and mdm9607, so call panic directly */
 #define VOS_BUG( _condition ) do {                                      \
         if ( ! ( _condition ) )                                         \
         {                                                               \

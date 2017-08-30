@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -59,6 +59,9 @@ enum ieee80211_phymode {
     IEEE80211_MODE_11AC_VHT40MINUS  = 17,   /* 5Ghz  VHT40 (Ext ch -1) */
     IEEE80211_MODE_11AC_VHT40       = 18,   /* 5Ghz, VHT40 */
     IEEE80211_MODE_11AC_VHT80       = 19,   /* 5Ghz, VHT80 */
+    IEEE80211_MODE_2G_AUTO          = 20,   /* 2G 11 b/g/n  autoselect */
+    IEEE80211_MODE_5G_AUTO          = 21,   /* 5G 11 a/n/ac autoselect */
+    IEEE80211_MODE_11AGN            = 22,   /* Support 11N in both 2G and 5G */
 };
 #define IEEE80211_MODE_MAX      (IEEE80211_MODE_11AC_VHT80 + 1)
 
@@ -544,5 +547,22 @@ struct ieee80211_chanutil_info {
     u_int32_t    beacon_count;
     u_int8_t     beacon_intervals;
 };
+
+/**
+ * struct ieee80211_radiotap_header - radio tap header
+ * @it_version: version 0
+ * @it_pad:     padding
+ * @it_len:     length of the whole header in bytes
+ * @it_present: bitmap telling which fields are present
+ *
+ * This struct is used to indicate rx status in monitor mode
+ * and carry tx parameters in packet injection.
+ */
+struct ieee80211_radiotap_header {
+	u_int8_t it_version;
+	u_int8_t it_pad;
+	u_int16_t it_len;
+	u_int32_t it_present;
+} __packed;
 
 #endif /* _COMMON__IEEE80211_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014, 2016-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -27,7 +27,7 @@
 
 #include "ath_dfs_structs.h"
 #include "_ieee80211_common.h"
-
+#include <vos_lock.h>
 #define IEEE80211_CHAN_MAX      255
 
 /* channel attributes */
@@ -120,6 +120,12 @@ struct ieee80211_channel
 
     /* Channel Center frequency applicable*/
     u_int32_t       ic_vhtop_ch_freq_seg2;
+
+    /*
+     * spectral separation between pri channel
+     * and the center frequency in MHz
+     */
+    int             ic_pri_freq_center_freq_mhz_separation;
 };
 
 struct ieee80211_channel_list
@@ -196,10 +202,13 @@ typedef struct ieee80211com
     int (*ic_dfs_control)(struct ieee80211com *ic,
                           u_int id, void *indata, u_int32_t insize,
                           void *outdata, u_int32_t *outsize);
+    void (*ic_update_dfs_cac_block_tx)(bool cac_block_tx);
     HAL_DFS_DOMAIN current_dfs_regdomain;
     u_int8_t vdev_id;
     u_int8_t last_radar_found_chan;
     int32_t dfs_pri_multiplier;
+    adf_os_spinlock_t chan_lock;
+    bool disable_phy_err_processing;
 } IEEE80211COM, *PIEEE80211COM;
 
 /*

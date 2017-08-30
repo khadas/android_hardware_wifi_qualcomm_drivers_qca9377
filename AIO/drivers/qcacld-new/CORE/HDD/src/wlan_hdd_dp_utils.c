@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -39,6 +39,8 @@
   Include files
   ----------------------------------------------------------------------------*/
 #include <wlan_hdd_dp_utils.h>
+#include <wlan_hdd_main.h>
+#include <sirDebug.h>
 
 /**-----------------------------------------------------------------------------
   Preprocessor definitions and constants
@@ -49,7 +51,7 @@
  ----------------------------------------------------------------------------*/
 
 /**-----------------------------------------------------------------------------
-  Function declarations and documenation
+  Function declarations and documentation
  ----------------------------------------------------------------------------*/
 
 
@@ -202,11 +204,9 @@ VOS_STATUS hdd_string_to_hex( char *pSrcMac, int length, char *pDescMac )
    char temp[3] = {0};
    int rv;
 
-   //18 is MAC Address length plus the colons
-   if ( !pSrcMac && (length > 18 || length < 18) )
-   {
+   if (!pSrcMac || (length != MAC_ADDRESS_STR_LEN))
       return VOS_STATUS_E_FAILURE;
-   }
+
    i = k = 0;
    while ( i < length )
    {
@@ -219,3 +219,62 @@ VOS_STATUS hdd_string_to_hex( char *pSrcMac, int length, char *pDescMac )
 
    return VOS_STATUS_SUCCESS;
 }
+
+#ifdef QCA_FEATURE_RPS
+/**
+ * hdd_dp_util_send_rps_ind() - send rps indication to daemon
+ * @hdd_ctxt: hdd context pointer
+ *
+ * If RPS feature enabled by INI, send RPS enable indication to daemon
+ * Indication contents is the name of interface to find correct sysfs node
+ * Should send all available interfaces
+ *
+ * Return: none
+ */
+void hdd_dp_util_send_rps_ind(hdd_adapter_t *adapter)
+{
+	int i = 0;
+	uint8_t cpu_map_list_len = 0;
+	hdd_context_t *hdd_ctxt;
+	struct wlan_rps_data rps_data;
+
+	if (NULL == adapter)
+		return;
+
+	hdd_ctxt = WLAN_HDD_GET_CTX(adapter);
+
+	rps_data.num_queues = NUM_TX_QUEUES;
+
+	hddLog(LOG1, FL("cpu_map_list '%s'"), hdd_ctxt->cfg_ini->cpu_map_list);
+
+	/* in case no cpu map list is provided, simply return */
+	if (!strlen(hdd_ctxt->cfg_ini->cpu_map_list)) {
+		hddLog(VOS_TRACE_LEVEL_ERROR, FL("no cpu map list found"));
+		return;
+	}
+
+	if (VOS_STATUS_SUCCESS !=
+		hdd_hex_string_to_u16_array(hdd_ctxt->cfg_ini->cpu_map_list,
+				rps_data.cpu_map_list,
+				&cpu_map_list_len,
+				WLAN_SVC_IFACE_NUM_QUEUES)) {
+		return;
+	}
+
+	rps_data.num_queues =
+		(cpu_map_list_len < rps_data.num_queues) ?
+				cpu_map_list_len : rps_data.num_queues;
+
+	for (i = 0; i < rps_data.num_queues; i++) {
+		hddLog(LOG1, FL("cpu_map_list[%d] = 0x%x"),
+			i, rps_data.cpu_map_list[i]);
+	}
+
+	strlcpy(rps_data.ifname, adapter->dev->name,
+		sizeof(rps_data.ifname));
+	wlan_hdd_send_svc_nlink_msg(hdd_ctxt->radio_index,
+			WLAN_SVC_RPS_ENABLE_IND,
+			&rps_data, sizeof(rps_data));
+}
+#endif /* QCA_FEATURE_RPS */
+

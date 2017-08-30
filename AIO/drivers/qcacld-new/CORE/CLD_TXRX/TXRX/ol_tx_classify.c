@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -54,46 +54,8 @@
 
 #if defined(CONFIG_HL_SUPPORT)
 
-#ifdef QCA_WIFI_ISOC
-
-A_STATUS
-ol_tx_classify_extension(
-    struct ol_txrx_vdev_t *vdev,
-    struct ol_tx_desc_t *tx_desc,
-    adf_nbuf_t tx_nbuf,
-    struct ol_txrx_msdu_info_t *tx_msdu_info);
-
-A_STATUS
-ol_tx_classify_mgmt_extension(
-    struct ol_txrx_vdev_t *vdev,
-    struct ol_tx_desc_t *tx_desc,
-    adf_nbuf_t tx_nbuf,
-    struct ol_txrx_msdu_info_t *tx_msdu_info);
-
-#define OL_TX_CLASSIFY_EXTENSION(vdev, tx_desc, netbuf, msdu_info, txq) \
-    do { \
-        A_STATUS status; \
-        status = ol_tx_classify_extension( \
-            vdev, tx_desc, netbuf, msdu_info); \
-        if (A_OK != status) { \
-            txq = NULL; /* error */ \
-        } \
-    } while (0)
-
-#define OL_TX_CLASSIFY_MGMT_EXTENSION(vdev, tx_desc, netbuf, msdu_info, txq) \
-    do { \
-        A_STATUS status; \
-        status = ol_tx_classify_mgmt_extension( \
-            vdev, tx_desc, netbuf, msdu_info); \
-        if (A_OK != status) { \
-            txq = NULL; /* error */ \
-        } \
-    } while (0)
-
-#else
 #define OL_TX_CLASSIFY_EXTENSION(vdev, tx_desc, netbuf, msdu_info, txq)
 #define OL_TX_CLASSIFY_MGMT_EXTENSION(vdev, tx_desc, netbuf, msdu_info, txq)
-#endif /* QCA_WIFI_ISOC */
 
 #ifdef QCA_TX_HTT2_SUPPORT
 static void
@@ -131,6 +93,31 @@ ol_tx_classify_htt2_frm(
 #else
 #define OL_TX_CLASSIFY_HTT2_EXTENSION(vdev, netbuf, msdu_info)      /* no-op */
 #endif /* QCA_TX_HTT2_SUPPORT */
+/* DHCP go with voice priority; WMM_AC_VO_TID1();*/
+#define TX_DHCP_TID  6
+
+#if defined(QCA_BAD_PEER_TX_FLOW_CL)
+static inline A_BOOL
+ol_if_tx_bad_peer_txq_overflow(
+    struct ol_txrx_pdev_t *pdev,
+    struct ol_txrx_peer_t *peer,
+    struct ol_tx_frms_queue_t *txq)
+{
+     if (peer && pdev && txq && (peer->tx_limit_flag) && (txq->frms >= pdev->tx_peer_bal.peer_bal_txq_limit)) {
+          return TRUE;
+     } else {
+          return FALSE;
+     }
+}
+#else
+static inline A_BOOL ol_if_tx_bad_peer_txq_overflow(
+    struct ol_txrx_pdev_t *pdev,
+    struct ol_txrx_peer_t *peer,
+    struct ol_tx_frms_queue_t *txq)
+{
+    return FALSE;
+}
+#endif
 
 /* EAPOL go with voice priority: WMM_AC_TO_TID1(WMM_AC_VO);*/
 #define TX_EAPOL_TID  6
@@ -313,7 +300,8 @@ ol_tx_tid(
         tx_msdu_info->htt.info.l2_hdr_type = htt_pkt_type_ethernet;
 
         ol_tx_set_ether_type(datap, tx_msdu_info);
-        tid = tx_msdu_info->htt.info.ext_tid == ADF_NBUF_TX_EXT_TID_INVALID ?
+        tid =
+            tx_msdu_info->htt.info.ext_tid == ADF_NBUF_TX_EXT_TID_INVALID ?
             ol_tx_tid_by_ether_type(datap, tx_msdu_info) :
             tx_msdu_info->htt.info.ext_tid;
     } else if (pdev->frame_format == wlan_frm_fmt_native_wifi) {
@@ -332,7 +320,8 @@ ol_tx_tid(
          */
         tid = tx_msdu_info->htt.info.ext_tid;
     } else {
-        adf_os_print("Invalid standard frame type: %d\n", pdev->frame_format);
+        VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_FATAL,
+            "Invalid standard frame type: %d\n", pdev->frame_format);
         adf_os_assert(0);
         tid = HTT_TX_EXT_TID_INVALID;
     }
@@ -358,7 +347,13 @@ ol_tx_classify(
     TX_SCHED_DEBUG_PRINT("Enter %s\n", __func__);
 
     dest_addr = ol_tx_dest_addr_find(pdev, tx_nbuf);
-    if (IEEE80211_IS_MULTICAST(dest_addr)) {
+    if (!dest_addr) {
+       VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
+                 "%s: Invalid dest_addr", __func__);
+        return NULL;
+    }
+    if ((IEEE80211_IS_MULTICAST(dest_addr))
+            || (vdev->opmode == wlan_op_mode_ocb)) {
         txq = &vdev->txqs[OL_TX_VDEV_MCAST_BCAST];
         tx_msdu_info->htt.info.ext_tid = HTT_TX_EXT_TID_NON_QOS_MCAST_BCAST;
         if (vdev->opmode == wlan_op_mode_sta) {
@@ -370,7 +365,7 @@ ol_tx_classify(
              */
             peer = ol_txrx_assoc_peer_find(vdev);
             if (!peer) {
-                adf_os_print(
+                VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
                     "Error: STA %p (%02x:%02x:%02x:%02x:%02x:%02x) "
                     "trying to send bcast DA tx data frame "
                     "w/o association\n",
@@ -379,12 +374,22 @@ ol_tx_classify(
                     vdev->mac_addr.raw[2], vdev->mac_addr.raw[3],
                     vdev->mac_addr.raw[4], vdev->mac_addr.raw[5]);
                 return NULL; /* error */
+            } else if ((peer->security[OL_TXRX_PEER_SECURITY_MULTICAST].sec_type
+                              != htt_sec_type_wapi) &&
+                              adf_nbuf_is_dhcp_pkt(tx_nbuf)) {
+                /* DHCP frame to go with voice priority */
+                txq = &peer->txqs[TX_DHCP_TID];
+                tx_msdu_info->htt.info.ext_tid = TX_DHCP_TID;
             }
             /*
              * The following line assumes each peer object has a single ID.
              * This is currently true, and is expected to remain true.
              */
             tx_msdu_info->htt.info.peer_id = peer->peer_ids[0];
+        } else if (vdev->opmode == wlan_op_mode_ocb) {
+            tx_msdu_info->htt.info.peer_id = HTT_INVALID_PEER_ID;
+            /* In OCB mode, don't worry about the peer. We don't need it. */
+            peer = NULL;
         } else {
             tx_msdu_info->htt.info.peer_id = HTT_INVALID_PEER_ID;
             /*
@@ -394,7 +399,7 @@ ol_tx_classify(
              */
             peer = ol_txrx_peer_find_hash_find(pdev, vdev->mac_addr.raw, 0, 1);
             if (!peer) {
-                adf_os_print(
+                VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
                     "Error: vdev %p (%02x:%02x:%02x:%02x:%02x:%02x) "
                     "trying to send bcast/mcast, but no self-peer found\n",
                     vdev,
@@ -409,7 +414,7 @@ ol_tx_classify(
         /* tid would be overwritten for non QoS case*/
         tid = ol_tx_tid(pdev, tx_nbuf, tx_msdu_info);
         if ((HTT_TX_EXT_TID_INVALID == tid) || (tid >= OL_TX_NUM_TIDS)) {
-             adf_os_print(
+             VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
                  "%s Error: could not classify packet into valid TID(%d).\n",
                  __func__, tid);
              return NULL;
@@ -419,7 +424,8 @@ ol_tx_classify(
         if (tx_msdu_info->htt.info.ethertype == ETHERTYPE_WAI) {
             /* WAI frames should not be encrypted */
             tx_msdu_info->htt.action.do_encrypt = 0;
-            adf_os_print("Tx Frame is a WAI frame\n");
+            VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO,
+                "Tx Frame is a WAI frame\n");
         }
         #endif /* ATH_SUPPORT_WAPI */
 
@@ -482,7 +488,7 @@ ol_tx_classify(
              * It is illegitimate to send unicast data if there is no peer
              * to send it to.
              */
-            adf_os_print(
+            VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO,
                 "Error: vdev %p (%02x:%02x:%02x:%02x:%02x:%02x) "
                 "trying to send unicast tx data frame to an unknown peer\n",
                 vdev,
@@ -492,9 +498,16 @@ ol_tx_classify(
             return NULL; /* error */
         }
         TX_SCHED_DEBUG_PRINT("Peer found\n");
-        if (!peer->qos_capable) {
+        if ((adf_nbuf_get_fwd_flag(tx_nbuf) != ADF_NBUF_FWD_FLAG) &&
+                          (!peer->qos_capable)) {
             tid = OL_TX_NON_QOS_TID;
+        } else if ((peer->security[OL_TXRX_PEER_SECURITY_UNICAST].sec_type
+                          != htt_sec_type_wapi) &&
+                          adf_nbuf_is_dhcp_pkt(tx_nbuf)) {
+            /* DHCP frame to go with voice priority */
+            tid = TX_DHCP_TID;
         }
+
         /* Only allow encryption when in authenticated state */
         if (ol_txrx_peer_state_auth != peer->state) {
             tx_msdu_info->htt.action.do_encrypt = 0;
@@ -529,6 +542,9 @@ ol_tx_classify(
         }
     }
     tx_msdu_info->peer = peer;
+    if (ol_if_tx_bad_peer_txq_overflow(pdev, peer, txq)) {
+        return NULL;
+    }
     /*
      * If relevant, do a deeper inspection to determine additional
      * characteristics of the tx frame.
@@ -536,9 +552,10 @@ ol_tx_classify(
      * indicate an error.
      */
     OL_TX_CLASSIFY_EXTENSION(vdev, tx_desc, tx_nbuf, tx_msdu_info, txq);
-    if (IEEE80211_IS_MULTICAST(dest_addr) && vdev->opmode != wlan_op_mode_sta) {
+    if (IEEE80211_IS_MULTICAST(dest_addr) && vdev->opmode != wlan_op_mode_sta &&
+        tx_msdu_info->peer != NULL) {
 
-        TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+        TXRX_PRINT(TXRX_PRINT_LEVEL_INFO1,
                       "%s: remove the peer reference %p\n", __func__, peer);
         /* remove the peer reference added above */
         ol_txrx_peer_unref_delete(tx_msdu_info->peer);
@@ -548,6 +565,9 @@ ol_tx_classify(
 
     /* Whether this frame can download though HTT2 data pipe or not. */
     OL_TX_CLASSIFY_HTT2_EXTENSION(vdev, tx_nbuf, tx_msdu_info);
+
+    /* Update Tx Queue info */
+    tx_desc->txq = txq;
 
     TX_SCHED_DEBUG_PRINT("Leave %s\n", __func__);
     return txq;
@@ -564,9 +584,15 @@ ol_tx_classify_mgmt(
     struct ol_txrx_peer_t *peer = NULL;
     struct ol_tx_frms_queue_t *txq = NULL;
     A_UINT8 *dest_addr;
+    union ol_txrx_align_mac_addr_t local_mac_addr_aligned, *mac_addr;
 
     TX_SCHED_DEBUG_PRINT("Enter %s\n", __func__);
     dest_addr = ol_tx_dest_addr_find(pdev, tx_nbuf);
+    if (!dest_addr) {
+       VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
+                 "%s: Invalid dest_addr", __func__);
+        return NULL;
+    }
     if (IEEE80211_IS_MULTICAST(dest_addr)) {
         /*
          * AP:  beacons are broadcast,
@@ -597,6 +623,23 @@ ol_tx_classify_mgmt(
              * MAC address.
              */
             peer = ol_txrx_assoc_peer_find(vdev);
+            /*
+             * Some special case(preauth for example) needs to send
+             * unicast mgmt frame to unassociated AP. In such case,
+             * we need to check if dest addr match the associated
+             * peer addr. If not, we set peer as NULL to queue this
+             * frame to vdev queue.
+             */
+            if (peer) {
+                adf_os_mem_copy(
+                    &local_mac_addr_aligned.raw[0],
+                    dest_addr, OL_TXRX_MAC_ADDR_LEN);
+                mac_addr = &local_mac_addr_aligned;
+                if (ol_txrx_peer_find_mac_addr_cmp(mac_addr, &peer->mac_addr) != 0) {
+                    adf_os_atomic_dec(&peer->ref_cnt);
+                    peer = NULL;
+                }
+            }
         } else {
             /* find the peer and increment its reference count */
             peer = ol_txrx_peer_find_hash_find(pdev, dest_addr, 0, 1);
@@ -626,6 +669,9 @@ ol_tx_classify_mgmt(
 
     /* Whether this frame can download though HTT2 data pipe or not. */
     OL_TX_CLASSIFY_HTT2_EXTENSION(vdev, tx_nbuf, tx_msdu_info);
+
+    /* Update Tx Queue info */
+    tx_desc->txq = txq;
 
     TX_SCHED_DEBUG_PRINT("Leave %s\n", __func__);
     return txq;

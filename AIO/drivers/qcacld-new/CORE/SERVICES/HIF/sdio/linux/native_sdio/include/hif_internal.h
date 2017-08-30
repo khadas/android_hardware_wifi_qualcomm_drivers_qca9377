@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -86,6 +86,15 @@ struct hif_device {
     struct completion async_completion;          /* thread completion */
     BUS_REQUEST   *asyncreq;                    /* request for async tasklet */
     BUS_REQUEST *taskreq;                       /*  async tasklet data */
+#ifdef TX_COMPLETION_THREAD
+    struct task_struct *tx_completion_task;
+    struct semaphore sem_tx_completion;
+    int    tx_completion_shutdown;
+    struct completion tx_completion_exit;
+    spinlock_t tx_completion_lock;
+    BUS_REQUEST *tx_completion_req;
+    BUS_REQUEST **last_tx_completion;
+#endif
     spinlock_t lock;
     BUS_REQUEST *s_busRequestFreeQueue;         /* free list */
     BUS_REQUEST busRequest[BUS_REQUEST_MAX_NUM]; /* available bus requests */
@@ -110,9 +119,10 @@ struct hif_device {
     void *htcContext;
     /* mailbox swapping for control and data svc*/
     A_BOOL swap_mailbox;
+    bool ctrl_response_timeout;
 };
 
-#define HIF_DMA_BUFFER_SIZE (56 * 1024)
+#define HIF_DMA_BUFFER_SIZE (4 * 1024)
 #define CMD53_FIXED_ADDRESS 1
 #define CMD53_INCR_ADDRESS  2
 

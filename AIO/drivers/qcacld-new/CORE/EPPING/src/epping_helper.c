@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -20,12 +20,10 @@
  */
 
 /*
- * Copyright (c) 2014 Qualcomm Atheros, Inc.
- * All Rights Reserved.
- * Qualcomm Atheros Confidential and Proprietary.
- *
+ * This file was originally distributed by Qualcomm Atheros, Inc.
+ * under proprietary terms before Copyright ownership was assigned
+ * to the Linux Foundation.
  */
-
 
 /*========================================================================
 
@@ -46,10 +44,8 @@
 #include <linux/delay.h>
 #include <wcnss_api.h>
 #include <wlan_hdd_tx_rx.h>
-#include <palTimer.h>
 #include <wniApi.h>
 #include <wlan_nlink_srv.h>
-#include <wlan_btc_svc.h>
 #include <wlan_hdd_cfg.h>
 #include <wlan_ptt_sock_svc.h>
 #include <wlan_hdd_wowl.h>
@@ -75,7 +71,7 @@ int epping_cookie_init(epping_context_t*pEpping_ctx)
    for (i = 0; i < MAX_COOKIE_SLOTS_NUM; i++) {
       pEpping_ctx->s_cookie_mem[i] =
          vos_mem_malloc(sizeof(struct epping_cookie)*MAX_COOKIE_SLOT_SIZE);
-      if (pEpping_ctx->s_cookie_mem == NULL) {
+      if (pEpping_ctx->s_cookie_mem[i] == NULL) {
          EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
             "%s: no mem for cookie (idx = %d)", __func__, i);
          goto error;
@@ -273,7 +269,15 @@ void epping_register_tx_copier(HTC_ENDPOINT_ID eid, epping_context_t *pEpping_ct
 }
 void epping_unregister_tx_copier(HTC_ENDPOINT_ID eid, epping_context_t *pEpping_ctx)
 {
-   epping_poll_t *epping_poll = &pEpping_ctx->epping_poll[eid];
+   epping_poll_t *epping_poll;
+
+   if (eid < 0 || eid >= EPPING_MAX_NUM_EPIDS ) {
+      EPPING_LOG(VOS_TRACE_LEVEL_FATAL, "%s: invalid eid = %d",
+         __func__, eid);
+      return;
+   }
+
+   epping_poll = &pEpping_ctx->epping_poll[eid];
 
    epping_poll->done = true;
    if (epping_poll->inited) {

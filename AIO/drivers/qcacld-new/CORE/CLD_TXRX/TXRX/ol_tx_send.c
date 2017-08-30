@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -30,6 +30,7 @@
 #include <adf_os_time.h>      /* adf_os_ticks, etc. */
 #include <adf_nbuf.h>         /* adf_nbuf_t */
 #include <adf_net_types.h>    /* ADF_NBUF_TX_EXT_TID_INVALID */
+#include "adf_trace.h"
 
 #include <queue.h>            /* TAILQ */
 #ifdef QCA_COMPUTE_TX_DELAY
@@ -57,7 +58,9 @@
 #ifdef QCA_SUPPORT_SW_TXRX_ENCAP
 #include <ol_txrx_encap.h>    /* OL_TX_RESTORE_HDR, etc*/
 #endif
+#include <ol_tx_queue.h>
 #include <ol_txrx.h>
+#include <pktlog_ac_fmt.h>
 
 #ifdef TX_CREDIT_RECLAIM_SUPPORT
 
@@ -208,7 +211,7 @@ void
 ol_tx_send(
     struct ol_txrx_pdev_t *pdev,
     struct ol_tx_desc_t *tx_desc,
-    adf_nbuf_t msdu)
+    adf_nbuf_t msdu, uint8_t vdev_id)
 {
     int msdu_credit_consumed;
     u_int16_t id;
@@ -216,6 +219,11 @@ ol_tx_send(
 
     msdu_credit_consumed = ol_tx_send_base(pdev, tx_desc, msdu);
     id = ol_tx_desc_id(pdev, tx_desc);
+    NBUF_UPDATE_TX_PKT_COUNT(msdu, NBUF_TX_PKT_TXRX);
+    DPTRACE(adf_dp_trace_ptr(msdu, ADF_DP_TRACE_TXRX_PACKET_PTR_RECORD,
+                adf_nbuf_data_addr(msdu),
+                sizeof(adf_nbuf_data(msdu)), tx_desc->id, vdev_id));
+
     failed = htt_tx_send_std(pdev->htt_pdev, msdu, id);
     if (adf_os_unlikely(failed)) {
         OL_TX_TARGET_CREDIT_INCR_INT(pdev, msdu_credit_consumed);
@@ -261,6 +269,7 @@ ol_tx_send_nonstd(
 
     msdu_credit_consumed = ol_tx_send_base(pdev, tx_desc, msdu);
     id = ol_tx_desc_id(pdev, tx_desc);
+    NBUF_UPDATE_TX_PKT_COUNT(msdu, NBUF_TX_PKT_TXRX);
     failed = htt_tx_send_nonstd(
         pdev->htt_pdev, msdu, id, pkt_type);
     if (failed) {
@@ -418,11 +427,11 @@ ol_tx_delay_compute(
                 OL_TX_RESTORE_HDR((_tx_desc), (_netbuf)); /* restore orginal hdr offset */      \
                 adf_nbuf_unmap((_pdev)->osdev, (_netbuf), ADF_OS_DMA_TO_DEVICE);                \
                 adf_nbuf_free((_netbuf));                                                       \
-                ((union ol_tx_desc_list_elem_t *)(_tx_desc))->next = (_lcl_freelist);           \
+                ((union ol_tx_desc_list_elem_t *)(_tx_desc))->next = (_lcl_freelist);          \
                 if (adf_os_unlikely(!lcl_freelist)) {                                           \
-                    (_tx_desc_last) = (union ol_tx_desc_list_elem_t *)(_tx_desc);               \
+                    (_tx_desc_last) = (union ol_tx_desc_list_elem_t *)(_tx_desc);              \
                 }                                                                               \
-                (_lcl_freelist) = (union ol_tx_desc_list_elem_t *)(_tx_desc);                   \
+                (_lcl_freelist) = (union ol_tx_desc_list_elem_t *)(_tx_desc);                  \
         } while (0)
 #else  /*!ATH_11AC_TXCOMPACT*/
 
@@ -431,11 +440,11 @@ ol_tx_delay_compute(
                 OL_TX_RESTORE_HDR((_tx_desc), (_netbuf)); /* restore orginal hdr offset */      \
                 adf_nbuf_unmap((_pdev)->osdev, (_netbuf), ADF_OS_DMA_TO_DEVICE);                \
                 adf_nbuf_free((_netbuf));                                                       \
-                ((union ol_tx_desc_list_elem_t *)(_tx_desc))->next = (_lcl_freelist);           \
+                ((union ol_tx_desc_list_elem_t *)(_tx_desc))->next = (_lcl_freelist);          \
                 if (adf_os_unlikely(!lcl_freelist)) {                                           \
-                    (_tx_desc_last) = (union ol_tx_desc_list_elem_t *)(_tx_desc);               \
+                    (_tx_desc_last) = (union ol_tx_desc_list_elem_t *)(_tx_desc);              \
                 }                                                                               \
-                (_lcl_freelist) = (union ol_tx_desc_list_elem_t *)(_tx_desc);                   \
+                (_lcl_freelist) = (union ol_tx_desc_list_elem_t *)(_tx_desc);                  \
         } while (0)
 
 
@@ -444,17 +453,22 @@ ol_tx_delay_compute(
 #ifdef QCA_TX_SINGLE_COMPLETIONS
     #ifdef QCA_TX_STD_PATH_ONLY
         #define ol_tx_msdu_complete(_pdev, _tx_desc, _tx_descs, _netbuf, _lcl_freelist,         \
-                                        _tx_desc_last, _status)                                 \
+                                        _tx_desc_last, _status, is_tx_desc_freed)               \
+        do {                                                                                    \
+            is_tx_desc_freed = 0;                                                               \
             ol_tx_msdu_complete_single((_pdev), (_tx_desc), (_netbuf), (_lcl_freelist),         \
-                                             _tx_desc_last)
+                                             _tx_desc_last);                                    \
+        } while (0)
     #else   /* !QCA_TX_STD_PATH_ONLY */
         #define ol_tx_msdu_complete(_pdev, _tx_desc, _tx_descs, _netbuf, _lcl_freelist,         \
-                                        _tx_desc_last, _status)                                 \
+                                        _tx_desc_last, _status, is_tx_desc_freed)               \
         do {                                                                                    \
             if (adf_os_likely((_tx_desc)->pkt_type == ol_tx_frm_std)) {                         \
+                is_tx_desc_freed = 0;                                                           \
                 ol_tx_msdu_complete_single((_pdev), (_tx_desc), (_netbuf), (_lcl_freelist),     \
                                              (_tx_desc_last));                                  \
             } else {                                                                            \
+                is_tx_desc_freed = 1;                                                           \
                 ol_tx_desc_frame_free_nonstd(                                                   \
                     (_pdev), (_tx_desc), (_status) != htt_tx_status_ok);                        \
             }                                                                                   \
@@ -463,15 +477,20 @@ ol_tx_delay_compute(
 #else  /* !QCA_TX_SINGLE_COMPLETIONS */
     #ifdef QCA_TX_STD_PATH_ONLY
         #define ol_tx_msdu_complete(_pdev, _tx_desc, _tx_descs, _netbuf, _lcl_freelist,         \
-                                        _tx_desc_last, _status)                                 \
-            ol_tx_msdus_complete_batch((_pdev), (_tx_desc), (_tx_descs), (_status))
+                                        _tx_desc_last, _status, is_tx_desc_freed)               \
+        do {                                                                                    \
+            is_tx_desc_freed = 0;                                                               \
+            ol_tx_msdu_complete_batch((_pdev), (_tx_desc), (_tx_descs), (_status));             \
+        } while (0)
     #else   /* !QCA_TX_STD_PATH_ONLY */
         #define ol_tx_msdu_complete(_pdev, _tx_desc, _tx_descs, _netbuf, _lcl_freelist,         \
-                                        _tx_desc_last, _status)                                 \
+                                        _tx_desc_last, _status, is_tx_desc_freed)               \
         do {                                                                                    \
             if (adf_os_likely((_tx_desc)->pkt_type == ol_tx_frm_std)) {                         \
+                is_tx_desc_freed = 0;                                                           \
                 ol_tx_msdu_complete_batch((_pdev), (_tx_desc), (_tx_descs), (_status));         \
             } else {                                                                            \
+                is_tx_desc_freed = 1;                                                           \
                 ol_tx_desc_frame_free_nonstd(                                                   \
                     (_pdev), (_tx_desc), (_status) != htt_tx_status_ok);                        \
             }                                                                                   \
@@ -483,8 +502,10 @@ void
 ol_tx_discard_target_frms(ol_txrx_pdev_handle pdev)
 {
     int i = 0;
-    for (i = 0; i < pdev->tx_desc.pool_size; i++) {
+    struct ol_tx_desc_t *tx_desc;
 
+    for (i = 0; i < pdev->tx_desc.pool_size; i++) {
+        tx_desc = ol_tx_desc_find(pdev, i);
         /*
          * Confirm that each tx descriptor is "empty", i.e. it has
          * no tx frame attached.
@@ -492,12 +513,12 @@ ol_tx_discard_target_frms(ol_txrx_pdev_handle pdev)
          * been given to the target to transmit, for which the
          * target has never provided a response.
          */
-        if (adf_os_atomic_read(&pdev->tx_desc.array[i].tx_desc.ref_cnt)) {
+        if (adf_os_atomic_read(&tx_desc->ref_cnt)) {
             TXRX_PRINT(TXRX_PRINT_LEVEL_WARN,
                 "Warning: freeing tx frame "
                 "(no tx completion from the target)\n");
             ol_tx_desc_frame_free_nonstd(
-                pdev, &pdev->tx_desc.array[i].tx_desc, 1);
+                pdev, tx_desc, 1);
         }
     }
 }
@@ -530,12 +551,13 @@ ol_tx_completion_handler(
     char *trace_str;
 
     uint32_t   byte_cnt = 0;
-    union ol_tx_desc_list_elem_t *td_array = pdev->tx_desc.array;
     adf_nbuf_t  netbuf;
 
     union ol_tx_desc_list_elem_t *lcl_freelist = NULL;
     union ol_tx_desc_list_elem_t *tx_desc_last = NULL;
     ol_tx_desc_list tx_descs;
+    uint32_t is_tx_desc_freed = 0;
+
     TAILQ_INIT(&tx_descs);
 
     OL_TX_DELAY_COMPUTE(pdev, status, desc_ids, num_msdus);
@@ -543,10 +565,24 @@ ol_tx_completion_handler(
     trace_str = (status) ? "OT:C:F:" : "OT:C:S:";
     for (i = 0; i < num_msdus; i++) {
         tx_desc_id = desc_ids[i];
-        tx_desc = &td_array[tx_desc_id].tx_desc;
+        tx_desc = ol_tx_desc_find(pdev, tx_desc_id);
         tx_desc->status = status;
         netbuf = tx_desc->netbuf;
+        NBUF_UPDATE_TX_PKT_COUNT(netbuf, NBUF_TX_PKT_FREE);
+        DPTRACE(adf_dp_trace_ptr(netbuf,
+                                 ADF_DP_TRACE_FREE_PACKET_PTR_RECORD,
+                                 adf_nbuf_data_addr(netbuf),
+                                 sizeof(adf_nbuf_data(netbuf)),
+                                 tx_desc->id, status));
+        if (pdev->cfg.is_high_latency) {
+            OL_TX_DESC_UPDATE_GROUP_CREDIT(pdev, tx_desc_id, 1, 0, status);
+        }
 
+        if (pdev->ol_tx_packetdump_cb)
+            pdev->ol_tx_packetdump_cb(netbuf, status, tx_desc->vdev_id,
+                                      TX_DATA_PKT);
+
+        htc_pm_runtime_put(pdev->htt_pdev->htc_pdev);
         adf_nbuf_trace_update(netbuf, trace_str);
         /* Per SDU update of byte count */
         byte_cnt += adf_nbuf_len(netbuf);
@@ -556,14 +592,17 @@ ol_tx_completion_handler(
                 status != htt_tx_status_ok);
             ol_tx_msdu_complete(
                 pdev, tx_desc, tx_descs, netbuf,
-                lcl_freelist, tx_desc_last, status);
-        }
+                lcl_freelist, tx_desc_last, status, is_tx_desc_freed);
+
 #ifdef QCA_SUPPORT_TXDESC_SANITY_CHECKS
-        tx_desc->pkt_type = 0xff;
+            if (!is_tx_desc_freed) {
+                tx_desc->pkt_type = ol_tx_frm_freed;
 #ifdef QCA_COMPUTE_TX_DELAY
-        tx_desc->entry_timestamp_ticks = 0xffffffff;
+                tx_desc->entry_timestamp_ticks = 0xffffffff;
 #endif
+            }
 #endif
+        }
     }
 
     /* One shot protected access to pdev freelist, when setup */
@@ -571,8 +610,8 @@ ol_tx_completion_handler(
         adf_os_spin_lock(&pdev->tx_mutex);
         tx_desc_last->next = pdev->tx_desc.freelist;
         pdev->tx_desc.freelist = lcl_freelist;
-        adf_os_spin_unlock(&pdev->tx_mutex);
         pdev->tx_desc.num_free += (u_int16_t) num_msdus;
+        adf_os_spin_unlock(&pdev->tx_mutex);
     } else {
         ol_tx_desc_frame_list_free(pdev, &tx_descs, status != htt_tx_status_ok);
     }
@@ -595,6 +634,123 @@ ol_tx_completion_handler(
     TXRX_STATS_UPDATE_TX_STATS(pdev, status, num_msdus, byte_cnt);
 }
 
+#ifdef FEATURE_HL_GROUP_CREDIT_FLOW_CONTROL
+void
+ol_tx_desc_update_group_credit(ol_txrx_pdev_handle pdev, u_int16_t tx_desc_id,
+                       int credit, u_int8_t absolute, enum htt_tx_status status)
+{
+    uint8_t i, is_member;
+    uint16_t vdev_id_mask;
+    struct ol_tx_desc_t *tx_desc;
+
+    tx_desc = ol_tx_desc_find(pdev, tx_desc_id);
+
+    for (i = 0; i < OL_TX_MAX_TXQ_GROUPS; i++) {
+        vdev_id_mask =
+               OL_TXQ_GROUP_VDEV_ID_MASK_GET(pdev->txq_grps[i].membership);
+        is_member = OL_TXQ_GROUP_VDEV_ID_BIT_MASK_GET(vdev_id_mask,
+                                                      tx_desc->vdev_id);
+        if (is_member) {
+            ol_txrx_update_group_credit(&pdev->txq_grps[i],
+                                        credit, absolute);
+            break;
+        }
+    }
+    OL_TX_UPDATE_GROUP_CREDIT_STATS(pdev);
+}
+
+#ifdef DEBUG_HL_LOGGING
+void
+ol_tx_update_group_credit_stats(ol_txrx_pdev_handle pdev)
+{
+    uint16 curr_index;
+    uint8 i;
+
+    adf_os_spin_lock_bh(&pdev->grp_stat_spinlock);
+    pdev->grp_stats.last_valid_index++;
+    if (pdev->grp_stats.last_valid_index > (OL_TX_GROUP_STATS_LOG_SIZE - 1)) {
+        pdev->grp_stats.last_valid_index -= OL_TX_GROUP_STATS_LOG_SIZE;
+        pdev->grp_stats.wrap_around = 1;
+    }
+    curr_index = pdev->grp_stats.last_valid_index;
+
+    for (i = 0; i < OL_TX_MAX_TXQ_GROUPS; i++) {
+        pdev->grp_stats.stats[curr_index].grp[i].member_vdevs =
+        OL_TXQ_GROUP_VDEV_ID_MASK_GET(pdev->txq_grps[i].membership);
+        pdev->grp_stats.stats[curr_index].grp[i].credit =
+                  adf_os_atomic_read(&pdev->txq_grps[i].credit);
+    }
+
+    adf_os_spin_unlock_bh(&pdev->grp_stat_spinlock);
+}
+
+void
+ol_tx_dump_group_credit_stats(ol_txrx_pdev_handle pdev)
+{
+    uint16 i,j, is_break = 0;
+    int16 curr_index, old_index, wrap_around;
+    uint16 curr_credit, old_credit, mem_vdevs;
+
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,"Group credit stats:");
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
+                                      "  No: GrpID: Credit: Change: vdev_map");
+
+    adf_os_spin_lock_bh(&pdev->grp_stat_spinlock);
+    curr_index = pdev->grp_stats.last_valid_index;
+    wrap_around = pdev->grp_stats.wrap_around;
+    adf_os_spin_unlock_bh(&pdev->grp_stat_spinlock);
+
+    if(curr_index < 0) {
+        VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,"Not initialized");
+        return;
+    }
+
+    for (i = 0; i < OL_TX_GROUP_STATS_LOG_SIZE; i++) {
+        old_index = curr_index - 1;
+        if (old_index < 0) {
+            if (wrap_around == 0)
+                is_break = 1;
+            else
+                old_index = OL_TX_GROUP_STATS_LOG_SIZE - 1;
+        }
+
+        for (j = 0; j < OL_TX_MAX_TXQ_GROUPS; j++) {
+            adf_os_spin_lock_bh(&pdev->grp_stat_spinlock);
+            curr_credit = pdev->grp_stats.stats[curr_index].grp[j].credit;
+            if (!is_break)
+                old_credit = pdev->grp_stats.stats[old_index].grp[j].credit;
+            mem_vdevs = pdev->grp_stats.stats[curr_index].grp[j].member_vdevs;
+            adf_os_spin_unlock_bh(&pdev->grp_stat_spinlock);
+
+            if (!is_break)
+                VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
+                      "%4d: %5d: %6d %6d %8x",curr_index, j,
+                      curr_credit, (curr_credit - old_credit),
+                      mem_vdevs);
+            else
+                VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_ERROR,
+                      "%4d: %5d: %6d %6s %8x",curr_index, j,
+                      curr_credit, "NA", mem_vdevs);
+       }
+
+       if (is_break)
+           break;
+
+       curr_index = old_index;
+    }
+}
+
+void ol_tx_clear_group_credit_stats(ol_txrx_pdev_handle pdev)
+{
+    adf_os_spin_lock_bh(&pdev->grp_stat_spinlock);
+    adf_os_mem_zero(&pdev->grp_stats, sizeof(pdev->grp_stats));
+    pdev->grp_stats.last_valid_index = -1;
+    pdev->grp_stats.wrap_around= 0;
+    adf_os_spin_unlock_bh(&pdev->grp_stat_spinlock);
+}
+#endif
+#endif
+
 /*
  * ol_tx_single_completion_handler performs the same tx completion
  * processing as ol_tx_completion_handler, but for a single frame.
@@ -611,15 +767,27 @@ ol_tx_single_completion_handler(
     u_int16_t tx_desc_id)
 {
     struct ol_tx_desc_t *tx_desc;
-    union ol_tx_desc_list_elem_t *td_array = pdev->tx_desc.array;
     adf_nbuf_t  netbuf;
 
-    tx_desc = &td_array[tx_desc_id].tx_desc;
+    tx_desc = ol_tx_desc_find_check(pdev, tx_desc_id);
+    if (tx_desc == NULL) {
+        TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+                "%s: invalid desc_id(%u), ignore it.\n",
+                __func__,
+                tx_desc_id);
+        return;
+    }
+
     tx_desc->status = status;
     netbuf = tx_desc->netbuf;
 
+    NBUF_UPDATE_TX_PKT_COUNT(netbuf, NBUF_TX_PKT_FREE);
     /* Do one shot statistics */
     TXRX_STATS_UPDATE_TX_STATS(pdev, status, 1, adf_nbuf_len(netbuf));
+
+    if (pdev->ol_tx_packetdump_cb)
+        pdev->ol_tx_packetdump_cb(netbuf, status, tx_desc->vdev_id,
+                                  TX_MGMT_PKT);
 
     if (OL_TX_DESC_NO_REFS(tx_desc)) {
         ol_tx_desc_frame_free_nonstd(pdev, tx_desc, status != htt_tx_status_ok);
@@ -658,16 +826,17 @@ ol_tx_inspect_handler(
     u_int16_t *desc_ids = (u_int16_t *)tx_desc_id_iterator;
     u_int16_t tx_desc_id;
     struct ol_tx_desc_t *tx_desc;
-    union ol_tx_desc_list_elem_t *td_array = pdev->tx_desc.array;
     union ol_tx_desc_list_elem_t *lcl_freelist = NULL;
     union ol_tx_desc_list_elem_t *tx_desc_last = NULL;
     adf_nbuf_t  netbuf;
     ol_tx_desc_list tx_descs;
+    uint32_t is_tx_desc_freed = 0;
+
     TAILQ_INIT(&tx_descs);
 
     for (i = 0; i < num_msdus; i++) {
         tx_desc_id = desc_ids[i];
-        tx_desc = &td_array[tx_desc_id].tx_desc;
+        tx_desc = ol_tx_desc_find(pdev, tx_desc_id);
         netbuf = tx_desc->netbuf;
 
         /* find the "vdev" this tx_desc belongs to */
@@ -688,7 +857,17 @@ ol_tx_inspect_handler(
              * for graceful freeing of this multicast frame
              */
             ol_tx_msdu_complete(pdev, tx_desc, tx_descs, netbuf, lcl_freelist,
-                                    tx_desc_last, htt_tx_status_ok);
+                                    tx_desc_last, htt_tx_status_ok,
+                                    is_tx_desc_freed);
+
+#ifdef QCA_SUPPORT_TXDESC_SANITY_CHECKS
+            if (!is_tx_desc_freed) {
+                tx_desc->pkt_type = ol_tx_frm_freed;
+#ifdef QCA_COMPUTE_TX_DELAY
+                tx_desc->entry_timestamp_ticks = 0xffffffff;
+#endif
+            }
+#endif
         }
     }
 
@@ -887,7 +1066,7 @@ static int
 ol_tx_delay_category(struct ol_txrx_pdev_t *pdev, u_int16_t msdu_id)
 {
 #ifdef QCA_COMPUTE_TX_DELAY_PER_TID
-    struct ol_tx_desc_t *tx_desc = &pdev->tx_desc.array[msdu_id].tx_desc;
+    struct ol_tx_desc_t *tx_desc = ol_tx_desc_find(pdev, msdu_id);
     u_int8_t tid;
 
     adf_nbuf_t msdu = tx_desc->netbuf;
@@ -943,13 +1122,15 @@ ol_tx_delay_compute(
      */
 
     cat = ol_tx_delay_category(pdev, desc_ids[0]);
-    if (cat == -1)
+    if (cat < 0 || cat >= QCA_TX_DELAY_NUM_CATEGORIES)
         return;
 
     pdev->packet_count[cat] = pdev->packet_count[cat] + num_msdus;
     if (status != htt_tx_status_ok) {
         for (i = 0; i < num_msdus; i++) {
             cat = ol_tx_delay_category(pdev, desc_ids[i]);
+            if (cat < 0 || cat >= QCA_TX_DELAY_NUM_CATEGORIES)
+                return;
             pdev->packet_loss_count[cat]++;
         }
         return;
@@ -977,8 +1158,8 @@ ol_tx_delay_compute(
     pdev->tx_delay.tx_compl_timestamp_ticks = now_ticks;
 
     for (i = 0; i < num_msdus; i++) {
-        u_int16_t id = desc_ids[i];
-        struct ol_tx_desc_t *tx_desc = &pdev->tx_desc.array[id].tx_desc;
+        uint16_t id = desc_ids[i];
+        struct ol_tx_desc_t *tx_desc = ol_tx_desc_find(pdev, id);
         int bin;
 
         tx_delay_queue_ticks = now_ticks - tx_desc->entry_timestamp_ticks;
@@ -1005,3 +1186,67 @@ ol_tx_delay_compute(
 }
 
 #endif /* QCA_COMPUTE_TX_DELAY */
+
+/**
+ * ol_register_packetdump_callback() - registers
+ * tx data packet, tx mgmt. packet and rx data packet
+ * dump callback handler
+ *
+ * @ol_tx_packetdump_cb: tx packetdump cb
+ * @ol_rx_packetdump_cb: rx packetdump cb
+ *
+ * This function is used to register tx data pkt, tx mgmt.
+ * pkt and rx data pkt dump callback
+ *
+ * Return: None
+ *
+ */
+void ol_register_packetdump_callback(tp_ol_packetdump_cb ol_tx_packetdump_cb,
+					tp_ol_packetdump_cb ol_rx_packetdump_cb)
+{
+	v_CONTEXT_t vos_context = NULL;
+	ol_txrx_pdev_handle pdev = NULL;
+
+	vos_context = vos_get_global_context(VOS_MODULE_ID_TXRX,
+						NULL);
+	pdev = vos_get_context(VOS_MODULE_ID_TXRX, vos_context);
+
+	if (!pdev) {
+		TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+				"%s: pdev is NULL", __func__);
+		return;
+	}
+
+	pdev->ol_tx_packetdump_cb = ol_tx_packetdump_cb;
+	pdev->ol_rx_packetdump_cb = ol_rx_packetdump_cb;
+}
+
+/**
+ * ol_deregister_packetdump_callback() - deregidters
+ * tx data packet, tx mgmt. packet and rx data packet
+ * dump callback handler
+ *
+ * This function is used to deregidter tx data pkt.,
+ * tx mgmt. pkt and rx data pkt. dump callback
+ *
+ * Return: None
+ *
+ */
+void ol_deregister_packetdump_callback(void)
+{
+	v_CONTEXT_t vos_context = NULL;
+	ol_txrx_pdev_handle pdev = NULL;
+
+	vos_context = vos_get_global_context(VOS_MODULE_ID_TXRX,
+						NULL);
+	pdev = vos_get_context(VOS_MODULE_ID_TXRX, vos_context);
+
+	if (!pdev) {
+		TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+				"%s: pdev is NULL", __func__);
+		return;
+	}
+
+	pdev->ol_tx_packetdump_cb = NULL;
+	pdev->ol_rx_packetdump_cb = NULL;
+}

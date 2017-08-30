@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -48,10 +48,7 @@
 #include "utilsApi.h"
 #include "limGlobal.h"
 #include "halMsgApi.h"
-#include "wlan_qct_wdi_ds.h"
 #include "wlan_qct_wda.h"
-#define LIM_POL_SYS_SCAN_MODE      0
-#define LIM_POL_SYS_LEARN_MODE     1
 
 /* Macro to count heartbeat */
 #define limResetHBPktCount(psessionEntry)   (psessionEntry->LimRxedBeaconCntDuringHB = 0)
@@ -59,11 +56,24 @@
 /* Useful macros for fetching various states in pMac->lim */
 /* gLimSystemRole */
 #define GET_LIM_SYSTEM_ROLE(psessionEntry)      (psessionEntry->limSystemRole)
-#define LIM_IS_AP_ROLE(psessionEntry)           (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_AP_ROLE)
-#define LIM_IS_BT_AMP_AP_ROLE(psessionEntry)    (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_BT_AMP_AP_ROLE)
-#define LIM_IS_BT_AMP_STA_ROLE(psessionEntry)   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_BT_AMP_STA_ROLE)
-#define LIM_IS_STA_ROLE(psessionEntry)          (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_STA_ROLE)
-#define LIM_IS_IBSS_ROLE(psessionEntry)         (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_STA_IN_IBSS_ROLE)
+#define LIM_IS_UNKNOWN_ROLE(psessionEntry)           \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_UNKNOWN_ROLE)
+#define LIM_IS_AP_ROLE(psessionEntry)           \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_AP_ROLE)
+#define LIM_IS_BT_AMP_AP_ROLE(psessionEntry)    \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_BT_AMP_AP_ROLE)
+#define LIM_IS_BT_AMP_STA_ROLE(psessionEntry)    \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_BT_AMP_STA_ROLE)
+#define LIM_IS_STA_ROLE(psessionEntry)          \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_STA_ROLE)
+#define LIM_IS_IBSS_ROLE(psessionEntry)         \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_STA_IN_IBSS_ROLE)
+#define LIM_IS_P2P_DEVICE_ROLE(psessionEntry)   \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_P2P_DEVICE_ROLE)
+#define LIM_IS_P2P_DEVICE_GO(psessionEntry)   \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_P2P_DEVICE_GO)
+#define LIM_IS_NDI_ROLE(psessionEntry)   \
+                   (GET_LIM_SYSTEM_ROLE(psessionEntry) == eLIM_NDI_ROLE)
 /* gLimSmeState */
 #define GET_LIM_SME_STATE(pMac)                 (pMac->lim.gLimSmeState)
 #define SET_LIM_SME_STATE(pMac, state)          (pMac->lim.gLimSmeState = state)
@@ -81,13 +91,26 @@
 #define GET_LIM_PROCESS_DEFD_MESGS(pMac) (pMac->lim.gLimProcessDefdMsgs)
 #define SET_LIM_PROCESS_DEFD_MESGS(pMac, val) (pMac->lim.gLimProcessDefdMsgs = val)
 // LIM exported function templates
-//inline tANI_U16
-//limGetNumAniPeersInBss(tpAniSirGlobal pMac)
-//{ return pMac->lim.gLimNumOfAniSTAs; }
 #define LIM_IS_RADAR_DETECTED(pMac)         (pMac->lim.gLimSpecMgmt.fRadarDetCurOperChan)
 #define LIM_SET_RADAR_DETECTED(pMac, val)   (pMac->lim.gLimSpecMgmt.fRadarDetCurOperChan = val)
 #define LIM_MIN_BCN_PR_LENGTH  12
 #define LIM_BCN_PR_CAPABILITY_OFFSET 10
+#define LIM_ASSOC_REQ_IE_OFFSET      4
+
+/**
+ * enum lim_vendor_ie_access_policy - vendor ie access policy
+ * @LIM_ACCESS_POLICY_NONE: access policy not valid
+ * @LIM_ACCESS_POLICY_RESPOND_IF_IE_IS_PRESENT: respond only if vendor ie
+ *         is present in probe request and assoc request frames
+ * @LIM_ACCESS_POLICY_DONOT_RESPOND_IF_IE_IS_PRESENT: do not respond if vendor
+ *         ie is present in probe request or assoc request frames
+ */
+enum lim_vendor_ie_access_policy {
+	LIM_ACCESS_POLICY_NONE,
+	LIM_ACCESS_POLICY_RESPOND_IF_IE_IS_PRESENT,
+	LIM_ACCESS_POLICY_DONOT_RESPOND_IF_IE_IS_PRESENT,
+};
+
 typedef enum eMgmtFrmDropReason
 {
     eMGMT_DROP_NO_DROP,
@@ -96,11 +119,10 @@ typedef enum eMgmtFrmDropReason
     eMGMT_DROP_SCAN_MODE_FRAME,
     eMGMT_DROP_NON_SCAN_MODE_FRAME,
     eMGMT_DROP_INVALID_SIZE,
+    eMGMT_DROP_SPURIOUS_FRAME,
 }tMgmtFrmDropReason;
 
 
-/// During TD ring clean up at HDD in RTAI, will call this call back
-extern void limPostTdDummyPktCallbak(void* pMacGlobals, unsigned int* pBd);
 /**
  * Function to initialize LIM state machines.
  * This called upon LIM thread creation.
@@ -109,22 +131,21 @@ extern tSirRetStatus limInitialize(tpAniSirGlobal);
 tSirRetStatus peOpen(tpAniSirGlobal pMac, tMacOpenParameters *pMacOpenParam);
 tSirRetStatus peClose(tpAniSirGlobal pMac);
 tSirRetStatus limStart(tpAniSirGlobal pMac);
-/**
- * Function to Initialize radar interrupts.
- */
-void limRadarInit(tpAniSirGlobal pMac);
 tSirRetStatus peStart(tpAniSirGlobal pMac);
 void peStop(tpAniSirGlobal pMac);
 tSirRetStatus pePostMsgApi(tpAniSirGlobal pMac, tSirMsgQ* pMsg);
 tSirRetStatus peProcessMsg(tpAniSirGlobal pMac, tSirMsgQ* limMsg);
 void limDumpInit(tpAniSirGlobal pMac);
 /**
- * Function to cleanup LIM state.
+ * Function to clean up LIM state.
  * This called upon reset/persona change etc
  */
 extern void limCleanup(tpAniSirGlobal);
 /// Function to post messages to LIM thread
 extern tANI_U32  limPostMsgApi(tpAniSirGlobal, tSirMsgQ *);
+uint32_t
+lim_post_msg_high_pri(tpAniSirGlobal mac, tSirMsgQ *msg);
+
 /**
  * Function to process messages posted to LIM thread
  * and dispatch to various sub modules within LIM module.
@@ -145,17 +166,8 @@ extern tSirRetStatus limHandleIBSScoalescing(tpAniSirGlobal,
 /// Function used by other Sirius modules to read global SME state
  static inline tLimSmeStates
 limGetSmeState(tpAniSirGlobal pMac) { return pMac->lim.gLimSmeState; }
-/// Function used by other Sirius modules to read global system role
- static inline tLimSystemRole
-limGetSystemRole(tpPESession psessionEntry) { return psessionEntry->limSystemRole; }
-//limGetAID(tpPESession psessionEntry) { return psessionEntry->limAID; }
 extern void limReceivedHBHandler(tpAniSirGlobal, tANI_U8, tpPESession);
-//extern void limResetHBPktCount(tpPESession);
 extern void limCheckAndQuietBSS(tpAniSirGlobal);
-/// Function to send WDS info to WSM if needed
-extern void limProcessWdsInfo(tpAniSirGlobal, tSirPropIEStruct);
-/// Function to initialize WDS info params
-extern void limInitWdsInfoParams(tpAniSirGlobal);
 /// Function that triggers STA context deletion
 extern void limTriggerSTAdeletion(tpAniSirGlobal pMac, tpDphHashNode pStaDs, tpPESession psessionEntry);
 
@@ -175,29 +187,34 @@ tSirRetStatus limUpdateShortSlot(tpAniSirGlobal pMac,
 extern void limSendAddtsReq (tpAniSirGlobal pMac, tANI_U16 staid, tANI_U8 tsid, tANI_U8 userPrio, tANI_U8 wme);
 /// creates a delts request action frame and sends it out to staid
 extern void limSendDeltsReq (tpAniSirGlobal pMac, tANI_U16 staid, tANI_U8 tsid, tANI_U8 userPrio, tANI_U8 wme);
-/// creates a SM Power State Mode update request action frame and sends it out to staid
-extern void limPostStartLearnModeMsgToSch(tpAniSirGlobal pMac);
 #ifdef WLAN_FEATURE_11AC
 extern ePhyChanBondState limGet11ACPhyCBState(tpAniSirGlobal pMac, tANI_U8 channel, tANI_U8 htSecondaryChannelOffset, tANI_U8 CenterChan,tpPESession );
 #endif
 tANI_U8 limIsSystemInActiveState(tpAniSirGlobal pMac);
-#if 0 /* Currently, this function is not used but keep it around for when we do need it */
-tSirRetStatus limUpdateGlobalChannelBonding(tpAniSirGlobal pMac, tHalBitVal cbBit);
-#endif /* 0 */
 
-void limHandleLowRssiInd(tpAniSirGlobal pMac);
 void limHandleMissedBeaconInd(tpAniSirGlobal pMac, tpSirMsgQ pMsg);
 void limPsOffloadHandleMissedBeaconInd(tpAniSirGlobal pMac, tpSirMsgQ pMsg);
 void
 limSendHeartBeatTimeoutInd(tpAniSirGlobal pMac, tpPESession psessionEntry);
 tMgmtFrmDropReason limIsPktCandidateForDrop(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo, tANI_U32 subType);
 void limMicFailureInd(tpAniSirGlobal pMac, tpSirMsgQ pMsg);
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+void limRoamOffloadSynchInd(tpAniSirGlobal pMac, tpSirMsgQ pMsg);
+#endif
+/**
+ * lim_mon_init_session() - create PE session for monitor mode operation
+ * @mac_ptr: mac pointer
+ * @msg: Pointer to struct sir_create_session type.
+ *
+ * Return: NONE
+ */
+void lim_mon_init_session(tpAniSirGlobal mac_ptr,
+			  struct sir_create_session *msg);
+void lim_update_lost_link_info(tpAniSirGlobal mac, tpPESession session,
+			       int8_t rssi);
 /* ----------------------------------------------------------------------- */
 // These used to be in DPH
-extern void limSetBssid(tpAniSirGlobal pMac, tANI_U8 *bssId);
-extern void limGetBssid(tpAniSirGlobal pMac, tANI_U8 *bssId);
 extern void limGetMyMacAddr(tpAniSirGlobal pMac, tANI_U8 *mac);
-extern tSirRetStatus limCheckRxSeqNumber(tpAniSirGlobal pMac, tANI_U8 *pRxPacketInfo);
 #define limGetQosMode(psessionEntry, pVal) (*(pVal) = (psessionEntry)->limQosEnabled)
 #define limGetWmeMode(psessionEntry, pVal) (*(pVal) = (psessionEntry)->limWmeEnabled)
 #define limGetWsmMode(psessionEntry, pVal) (*(pVal) = (psessionEntry)->limWsmEnabled)
@@ -268,5 +285,15 @@ void limRemainOnChnRsp(tpAniSirGlobal pMac, eHalStatus status, tANI_U32 *data);
   --------------------------------------------------------------------------*/
 void limProcessAbortScanInd(tpAniSirGlobal pMac, tANI_U8 sessionId);
 
+void lim_smps_force_mode_ind(tpAniSirGlobal mac_ctx, tpSirMsgQ msg);
+
+typedef void (*tp_pe_packetdump_cb)(adf_nbuf_t netbuf,
+			uint8_t status, uint8_t vdev_id, uint8_t type);
+
+void pe_register_packetdump_callback(tp_pe_packetdump_cb pe_packetdump_cb);
+void pe_deregister_packetdump_callback(void);
+
+eHalStatus pe_AcquireGlobalLock(tAniSirLim *pe);
+eHalStatus pe_ReleaseGlobalLock(tAniSirLim *pe);
 /************************************************************/
 #endif /* __LIM_API_H */

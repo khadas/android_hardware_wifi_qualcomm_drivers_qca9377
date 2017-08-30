@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -40,11 +40,7 @@
 #include "wma_api.h"
 #include "wlan_hdd_main.h"
 #include "epping_main.h"
-
-#ifdef WLAN_BTAMP_FEATURE
-#include "wlan_btc_svc.h"
-#include "wlan_nlink_common.h"
-#endif
+#include "vos_sched.h"
 
 #ifndef REMOVE_PKT_LOG
 #include "ol_txrx_types.h"
@@ -215,7 +211,9 @@ hif_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 
 	init_waitqueue_head(&ol_sc->sc_osdev->event_queue);
 
-	ret = hdd_wlan_startup(&pdev->dev, ol_sc);
+	ret = hif_init_adf_ctx(ol_sc);
+	if (ret == 0)
+		ret = hdd_wlan_startup(&pdev->dev, ol_sc);
 	if (ret) {
 		hif_nointrs(sc);
 		if (sc->hif_device != NULL) {
@@ -228,24 +226,6 @@ hif_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 	atomic_set(&sc->hdd_removed_processing, 0);
 	sc->hdd_removed_wait_cnt = 0;
 
-#ifndef REMOVE_PKT_LOG
-	if (vos_get_conparam() != VOS_FTM_MODE &&
-        !WLAN_IS_EPPING_ENABLED(vos_get_conparam())) {
-		/*
-		 * pktlog initialization
-		 */
-		ol_pl_sethandle(&ol_sc->pdev_txrx_handle->pl_dev, ol_sc);
-
-		if (pktlogmod_init(ol_sc))
-			pr_err("%s: pktlogmod_init failed\n", __func__);
-	}
-#endif
-
-#ifdef WLAN_BTAMP_FEATURE
-	/* Send WLAN UP indication to Nlink Service */
-	send_btc_nlink_msg(WLAN_MODULE_UP_IND, 0);
-#endif
-
 	sc->interface = interface;
 	sc->reboot_notifier.notifier_call = hif_usb_reboot;
 	register_reboot_notifier(&sc->reboot_notifier);
@@ -254,6 +234,7 @@ hif_usb_probe(struct usb_interface *interface, const struct usb_device_id *id)
 	return 0;
 
 err_config:
+	hif_deinit_adf_ctx(ol_sc);
 	HIFDiagWriteCOLDRESET(sc->hif_device);
 	A_FREE(ol_sc);
 err_attach:
@@ -290,6 +271,7 @@ static void hif_usb_remove(struct usb_interface *interface)
 		usb_sc->hdd_removed_wait_cnt ++;
 	}
 	atomic_set(&usb_sc->hdd_removed_processing, 1);
+	vos_set_shutdown_in_progress(VOS_MODULE_ID_HIF, TRUE);
 
 	/* disable lpm to avoid following cold reset will
 	 *cause xHCI U1/U2 timeout
@@ -304,9 +286,6 @@ static void hif_usb_remove(struct usb_interface *interface)
 	/* do cold reset */
 	HIFDiagWriteCOLDRESET(sc->hif_device);
 
-	if (usb_sc->suspend_state) {
-		hif_usb_resume(usb_sc->interface);
-	}
 	unregister_reboot_notifier(&sc->reboot_notifier);
 	usb_put_dev(interface_to_usbdev(interface));
 	if (atomic_read(&hif_usb_unload_state) ==
@@ -337,7 +316,9 @@ static void hif_usb_remove(struct usb_interface *interface)
 
 	hif_nointrs(sc);
 	HIF_USBDeviceDetached(interface, 1);
+	vos_set_shutdown_in_progress(VOS_MODULE_ID_HIF, FALSE);
 	atomic_set(&usb_sc->hdd_removed_processing, 0);
+	hif_deinit_adf_ctx(scn);
 	A_FREE(scn);
 	A_FREE(sc);
 	usb_sc = NULL;
@@ -367,22 +348,6 @@ static int hif_usb_suspend(struct usb_interface *interface, pm_message_t state)
 	if (wma_check_scan_in_progress(temp_module)) {
 		printk("%s: Scan in progress. Aborting suspend\n", __func__);
 		return (-1);
-	}
-
-	/* No need to send WMI_PDEV_SUSPEND_CMDID to FW if WOW is enabled */
-	if (wma_is_wow_mode_selected(temp_module)) {
-		if (wma_enable_wow_in_fw(temp_module)) {
-			pr_warn("%s[%d]: fail\n", __func__, __LINE__);
-			return -1;
-		}
-	} else if ((PM_EVENT_FREEZE & state.event) == PM_EVENT_FREEZE ||
-		(PM_EVENT_SUSPEND & state.event) == PM_EVENT_SUSPEND ||
-		(PM_EVENT_HIBERNATE & state.event) == PM_EVENT_HIBERNATE) {
-		if (wma_suspend_target
-		    (vos_get_context(VOS_MODULE_ID_WDA, vos), 0)) {
-			pr_warn("%s[%d]: fail\n", __func__, __LINE__);
-			return -1;
-		}
 	}
 
 	sc->suspend_state = 1;
@@ -417,13 +382,6 @@ static int hif_usb_resume(struct usb_interface *interface)
 	usb_hif_post_recv_transfers(&device->pipes[HIF_RX_INT_PIPE],
 				    HIF_USB_RX_BUFFER_SIZE);
 #endif
-	/* No need to send WMI_PDEV_RESUME_CMDID to FW if WOW is enabled */
-	if (!wma_is_wow_mode_selected(temp_module)) {
-		wma_resume_target(temp_module);
-	} else if (wma_disable_wow_in_fw(temp_module)) {
-		pr_warn("%s[%d]: fail\n", __func__, __LINE__);
-		return (-1);
-	}
 	printk("Exit:%s,Line:%d\n", __func__,__LINE__);
 	return 0;
 }
@@ -441,6 +399,7 @@ static int hif_usb_reset_resume(struct usb_interface *intf)
 
 static struct usb_device_id hif_usb_id_table[] = {
 	{USB_DEVICE_AND_INTERFACE_INFO(VENDOR_ATHR, 0x9378, 0xFF, 0xFF, 0xFF)},
+	{USB_DEVICE_AND_INTERFACE_INFO(VENDOR_ATHR, 0x9379, 0xFF, 0xFF, 0xFF)},
 	{}			/* Terminating entry */
 };
 
@@ -459,20 +418,44 @@ struct usb_driver hif_usb_drv_id = {
 	.supports_autosuspend = true,
 };
 
-void hif_init_adf_ctx(adf_os_device_t adf_dev, void *ol_sc)
+int hif_init_adf_ctx(void *ol_sc)
 {
+	adf_os_device_t adf_ctx;
+	v_CONTEXT_t pVosContext = NULL;
 	struct ol_softc *sc = (struct ol_softc *)ol_sc;
 	struct hif_usb_softc *hif_sc = (struct hif_usb_softc *)sc->hif_sc;
-	adf_dev->drv = &hif_sc->aps_osdev;
-	adf_dev->drv_hdl = hif_sc->aps_osdev.bdev;
-	adf_dev->dev = hif_sc->aps_osdev.device;
-	sc->adf_dev = adf_dev;
+
+	pVosContext = vos_get_global_context(VOS_MODULE_ID_SYS, NULL);
+	if(pVosContext == NULL)
+		return -EFAULT;
+
+	adf_ctx = vos_mem_malloc(sizeof(*adf_ctx));
+	if (!adf_ctx)
+		return -ENOMEM;
+	vos_mem_zero(adf_ctx, sizeof(*adf_ctx));
+	adf_ctx->drv = &hif_sc->aps_osdev;
+	adf_ctx->drv_hdl = hif_sc->aps_osdev.bdev;
+	adf_ctx->dev = hif_sc->aps_osdev.device;
+	sc->adf_dev = adf_ctx;
+	((VosContextType*)(pVosContext))->adf_ctx = adf_ctx;
+	return 0;
 }
 
 void hif_deinit_adf_ctx(void *ol_sc)
 {
 	struct ol_softc *sc = (struct ol_softc *)ol_sc;
-	sc->adf_dev = NULL;
+
+	if (sc == NULL)
+		return;
+	if (sc->adf_dev) {
+		v_CONTEXT_t pVosContext = NULL;
+
+		pVosContext = vos_get_global_context(VOS_MODULE_ID_SYS, NULL);
+		vos_mem_free(sc->adf_dev);
+		sc->adf_dev = NULL;
+		if (pVosContext)
+			((VosContextType*)(pVosContext))->adf_ctx = NULL;
+	}
 }
 
 static int hif_usb_dev_notify(struct notifier_block *nb,
@@ -629,7 +612,9 @@ void hif_get_hw_info(void *ol_sc, u32 *version, u32 *revision)
 						break;
 					case AR6320_REV2_1_VERSION:
 					case AR6320_REV3_VERSION:
+					case AR6320_REV3_2_VERSION:
 					case QCA9377_REV1_1_VERSION:
+					case QCA9379_REV1_VERSION:
 						hif_type = HIF_TYPE_AR6320V2;
 						target_type = TARGET_TYPE_AR6320V2;
 						break;
@@ -665,25 +650,6 @@ void hif_get_hw_info(void *ol_sc, u32 *version, u32 *revision)
 void hif_set_fw_info(void *ol_sc, u32 target_fw_version)
 {
 	((struct ol_softc *)ol_sc)->target_fw_version = target_fw_version;
-}
-
-int hif_pm_runtime_get(void)
-{
-	if (usb_sc && usb_sc->interface)
-		return usb_autopm_get_interface_async(usb_sc->interface);
-	else {
-		pr_err("%s: USB interface isn't ready for autopm\n", __func__);
-		return 0;
-	}
-}
-
-int hif_pm_runtime_put(void)
-{
-	if (usb_sc && usb_sc->interface)
-		usb_autopm_put_interface_async(usb_sc->interface);
-	else
-		pr_err("%s: USB interface isn't ready for autopm\n", __func__);
-	return 0;
 }
 
 MODULE_LICENSE("Dual BSD/GPL");

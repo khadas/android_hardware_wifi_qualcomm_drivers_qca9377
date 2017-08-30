@@ -1,32 +1,16 @@
-comment "Qualcomm Atheros Prima WLAN module"
+comment "Qualcomm Atheros CLD WLAN module"
 
-config PRIMA_WLAN
+config QCA_CLD_WLAN
 
-	tristate "Qualcomm Atheros Prima WLAN module"
+	tristate "Qualcomm Atheros CLD WLAN module"
 	default n
 	help
-	Add support for the Qualcomm Atheros Prima WLAN module
+	Add support for the Qualcomm Atheros CLD WLAN module
 
-config PRONTO_WLAN
+if QCA_CLD_WLAN != n
 
-	tristate "Qualcomm Atheros Pronto WLAN module"
-	default n
-	help
-	Add support for the Qualcomm Atheros Pronto WLAN module
-
-
-#	depends on WLAN
-#	depends on CFG80211
-#        depends on WCNSS_CORE
-
-if PRIMA_WLAN != n || PRONTO_WLAN != n
-
-config PRIMA_WLAN_BTAMP
-	bool "Enable the Prima WLAN BT-AMP feature"
-	default n
-
-config PRIMA_WLAN_LFR
-	bool "Enable the Prima WLAN Legacy Fast Roaming feature"
+config QCACLD_WLAN_LFR3
+	bool "Enable the WLAN Legacy Fast Roaming feature Version 3"
 	default n
 
 config PRIMA_WLAN_OKC
@@ -49,12 +33,49 @@ config QCOM_VOWIFI_11R
 	bool "Enable Fast Transition (11r) feature"
 	default n
 
-config CONFIG_ENABLE_LINUX_REG
-	bool "Enable linux regulatory feature"
-	default n
-
-config CONFIG_FEATURE_NAN
+config WLAN_FEATURE_NAN
 	bool "Enable NAN feature"
 	default n
 
-endif # PRIMA_WLAN || PRONTO_WLAN
+config WLAN_FEATURE_NAN_DATAPATH
+	bool "Enable NaN Data Path feature"
+	depends on WLAN_FEATURE_NAN
+	default n
+
+config QCOM_TDLS
+	bool "Enable TDLS feature"
+	default n
+
+config QCOM_LTE_COEX
+	bool "Enable QCOM LTE Coex feature"
+	default n
+
+config WLAN_SYNC_TSF
+	bool "Enable QCOM sync multi devices tsf feature"
+	default n
+
+config WLAN_FEATURE_MEMDUMP
+	bool "Enable MEMDUMP feature"
+	default n
+
+config WLAN_OFFLOAD_PACKETS
+	bool "Enable offload packets feature"
+	default n
+
+config QCA_WIFI_AUTOMOTIVE_CONC
+	bool "Enable 3 port concurrency feature"
+	default n
+
+config WLAN_UDP_RESPONSE_OFFLOAD
+	bool "Enable UDP response offload feature"
+	default n
+
+config WLAN_WOW_PULSE
+	bool "Enable WOW Pulse feature"
+	default n
+
+config DPTRACE_ENABLE
+	bool "Enable DPTRACE feature for non performance builds"
+	default n
+
+endif # QCA_CLD_WLAN

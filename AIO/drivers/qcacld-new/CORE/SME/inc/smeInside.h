@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -33,7 +33,7 @@
 
   \file  smeInside.h
 
-  \brief prototype for SME structures and APIs used insside SME
+  \brief prototype for SME structures and APIs used inside SME
 
   ========================================================================*/
 
@@ -66,7 +66,12 @@ ePhyChanBondState csrConvertCBIniValueToPhyCBState(v_U32_t cbIniValue);
   Type declarations
   ------------------------------------------------------------------------*/
 
-#define SME_TOTAL_COMMAND  40
+/*
+ * In case MAX num of STA are connected to SAP, switching off SAP causes
+ * two SME cmd to be enqueued for each STA. Keeping SME total cmds as following
+ * to make sure we have space for these cmds + some additional cmds.
+ */
+#define SME_TOTAL_COMMAND              (HAL_NUM_STA * 3)
 
 
 typedef struct sGenericPmcCmd
@@ -74,7 +79,10 @@ typedef struct sGenericPmcCmd
     tANI_U32 size;  //sizeof the data in the union, if any
     tANI_U32 sessionId;
     tRequestFullPowerReason fullPowerReason;
-    tANI_BOOLEAN fReleaseWhenDone; //if TRUE, the command shall not put back to the queue, free te memory instead.
+
+    /* If TRUE, the command shall not put back to the queue,
+       free the memory instead */
+    tANI_BOOLEAN fReleaseWhenDone;
     union
     {
         tExitBmpsInfo exitBmpsInfo;
@@ -152,23 +160,6 @@ typedef struct TdlsDelStaInfo
 {
   tSirMacAddr peerMac;
 } tTdlsDelStaCmdInfo;
-#ifdef FEATURE_WLAN_TDLS_INTERNAL
-typedef struct TdlsDisReqCmdinfo
-{
-      tSirMacAddr peerMac;
-          tANI_U8 tdlsDisType;
-} tTdlsDisReqCmdinfo;
-
-typedef struct tdlsLinkSetupReqCmdinfo
-{
-      tSirMacAddr peerMac;
-} tTdlsLinkSetupReqCmdinfo;
-
-typedef struct tdlsLinkTeardownCmdinfo
-{
-      tSirMacAddr peerMac;
-} tTdlsLinkTeardownCmdinfo;
-#endif
 /*
  * TDLS cmd info, CMD from SME to PE.
  */
@@ -177,13 +168,6 @@ typedef struct s_tdls_cmd
   tANI_U32 size;
   union
   {
-#ifdef FEATURE_WLAN_TDLS_INTERNAL
-    tTdlsDisReqCmdinfo tdlsDisReqCmdInfo ;
-    tTdlsLinkSetupReqCmdinfo tdlsLinkSetupReqCmdInfo ;
-    tTdlsLinkTeardownCmdinfo tdlsLinkTeardownCmdInfo ;
-    //tEnterPeerUAPSDInfo enterUapsdInfo ;
-    //tExitPeerUAPSDinfo  exitUapsdInfo ;
-#endif
     tTdlsLinkEstablishCmdInfo tdlsLinkEstablishCmdInfo;
     tTdlsSendMgmtCmdInfo tdlsSendMgmtCmdInfo;
     tTdlsAddStaCmdInfo   tdlsAddStaCmdInfo;
@@ -191,6 +175,19 @@ typedef struct s_tdls_cmd
   }u;
 } tTdlsCmd;
 #endif  /* FEATURE_WLAN_TDLS */
+
+/**
+ * struct s_ani_set_tx_max_pwr - Req params to set max tx power
+ * @bssid: bssid to set the power cap for
+ * @self_mac_addr:self mac address
+ * @power: power to set in dB
+ */
+struct s_ani_set_tx_max_pwr
+{
+    tSirMacAddr   bssid;
+    tSirMacAddr   self_sta_mac_addr;
+    tPowerdBm     power;
+};
 
 typedef struct tagSmeCmd
 {
@@ -216,6 +213,14 @@ typedef struct tagSmeCmd
 #ifdef FEATURE_WLAN_TDLS
         tTdlsCmd  tdlsCmd;
 #endif
+        struct s_ani_set_tx_max_pwr set_tx_max_pwr;
+        struct csr_set_tx_max_pwr_per_band set_tx_max_pwr_per_band;
+
+#ifdef WLAN_FEATURE_NAN_DATAPATH
+        struct ndp_initiator_req initiator_req;
+        struct ndp_responder_req responder_req;
+        struct ndp_end_req *data_end_req;
+#endif
     }u;
 }tSmeCmd;
 
@@ -236,6 +241,7 @@ void purgeSmeSessionCmdList(tpAniSirGlobal pMac, tANI_U32 sessionId,
 tANI_BOOLEAN smeCommandPending(tpAniSirGlobal pMac);
 tANI_BOOLEAN pmcProcessCommand( tpAniSirGlobal pMac, tSmeCmd *pCommand );
 tANI_BOOLEAN pmcOffloadProcessCommand(tpAniSirGlobal pMac,tSmeCmd *pCommand);
+tANI_BOOLEAN pmcOffloadIsStaInPowerSave(tpAniSirGlobal pMac, tANI_U32 sessionId);
 
 //this function is used to abort a command where the normal processing of the command
 //is terminated without going through the normal path. it is here to take care of callbacks for
@@ -265,6 +271,7 @@ eHalStatus csrIsFullPowerNeeded( tpAniSirGlobal pMac, tSmeCmd *pCommand, tReques
 void csrAbortCommand( tpAniSirGlobal pMac, tSmeCmd *pCommand, tANI_BOOLEAN fStopping );
 
 VOS_STATUS csrIsValidChannel(tpAniSirGlobal pMac, tANI_U8 chnNum);
+tANI_BOOLEAN csrRoamIsValid40MhzChannel(tpAniSirGlobal pMac, tANI_U8 chnNum);
 
 eHalStatus sme_AcquireGlobalLock( tSmeStruct *psSme);
 eHalStatus sme_ReleaseGlobalLock( tSmeStruct *psSme);
@@ -295,7 +302,6 @@ eHalStatus pmcSetNSOffload (tHalHandle hHal, tpSirHostOffloadReq pRequest, tANI_
 #ifdef FEATURE_WLAN_SCAN_PNO
 eHalStatus pmcSetPreferredNetworkList(tHalHandle hHal, tpSirPNOScanReq pRequest, tANI_U8 sessionId, preferredNetworkFoundIndCallback callbackRoutine,  void *callbackContext);
 eHalStatus pmcUpdateScanParams(tHalHandle hHal, tCsrConfig *pRequest, tCsrChannel *pChannelList, tANI_U8 b11dResolved);
-eHalStatus pmcSetRssiFilter(tHalHandle hHal,   v_U8_t        rssiThreshold);
 #endif // FEATURE_WLAN_SCAN_PNO
 eHalStatus pmcSetPowerParams(tHalHandle hHal,   tSirSetPowerParamsReq*  pwParams, tANI_BOOLEAN forced);
 
@@ -304,38 +310,39 @@ tANI_BOOLEAN csrRoamGetConcurrencyConnectStatusForBmps(tpAniSirGlobal pMac);
 eHalStatus csrTdlsSendMgmtReq(tHalHandle hHal, tANI_U8 sessionId, tCsrTdlsSendMgmt *tdlsSendMgmt);
 VOS_STATUS csrTdlsSendLinkEstablishParams(tHalHandle hHal,
                                           tANI_U8 sessionId,
-                                          tSirMacAddr peerMac,
+                                          const tSirMacAddr peerMac,
                                           tCsrTdlsLinkEstablishParams *tdlsLinkEstablishParams);
-eHalStatus csrTdlsAddPeerSta(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac);
-eHalStatus csrTdlsChangePeerSta(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac, tCsrStaParams *pstaParams);
-eHalStatus csrTdlsDelPeerSta(tHalHandle hHal, tANI_U8 sessionId, tSirMacAddr peerMac);
+eHalStatus csrTdlsAddPeerSta(tHalHandle hHal, tANI_U8 sessionId,
+                             const tSirMacAddr peerMac);
+eHalStatus csrTdlsChangePeerSta(tHalHandle hHal, tANI_U8 sessionId,
+                                const tSirMacAddr peerMac,
+                                tCsrStaParams *pstaParams);
+eHalStatus csrTdlsDelPeerSta(tHalHandle hHal, tANI_U8 sessionId,
+                             const tSirMacAddr peerMac);
 eHalStatus csrTdlsProcessCmd(tpAniSirGlobal pMac,tSmeCmd *pCommand );
 eHalStatus csrTdlsProcessLinkEstablish( tpAniSirGlobal pMac, tSmeCmd *cmd );
 eHalStatus tdlsMsgProcessor(tpAniSirGlobal pMac,v_U16_t msg_type,
                                                            void *pMsgBuf);
-#ifdef FEATURE_WLAN_TDLS_INTERNAL
-eHalStatus csrTdlsDiscoveryReq(tHalHandle hHal, tANI_U8 sessionId,
-                                          tCsrTdlsDisRequest *tdlsDisReq);
-eHalStatus csrTdlsSetupReq(tHalHandle hHal, tANI_U8 sessionId,
-                                         tCsrTdlsSetupRequest *tdlsSetupReq);
-eHalStatus csrTdlsTeardownReq(tHalHandle hHal, tANI_U8 sessionId,
-                                         tCsrTdlsTeardownRequest *teardown);
-#endif
 #endif /* FEATURE_WLAN_TDLS */
 
 #if  defined (WLAN_FEATURE_VOWIFI_11R) || defined (FEATURE_WLAN_ESE) || defined(FEATURE_WLAN_LFR)
-eHalStatus csrFlushCfgBgScanRoamChannelList(tpAniSirGlobal pMac);
+eHalStatus csrFlushCfgBgScanRoamChannelList(tpAniSirGlobal pMac,
+                                            tANI_U8 sessionId);
 eHalStatus csrCreateBgScanRoamChannelList(tpAniSirGlobal pMac,
-                                            const tANI_U8 *pChannelList,
-                                            const tANI_U8 numChannels);
-eHalStatus csrUpdateBgScanConfigIniChannelList(tpAniSirGlobal pMac, eCsrBand eBand);
+                                          tANI_U8 sessionId,
+                                          const tANI_U8 *pChannelList,
+                                          const tANI_U8 numChannels);
+eHalStatus csrUpdateBgScanConfigIniChannelList(tpAniSirGlobal pMac,
+                                               tANI_U8 sessionId,
+                                               eCsrBand eBand);
 #endif
 
 #if defined(FEATURE_WLAN_ESE) && defined(FEATURE_WLAN_ESE_UPLOAD)
 eHalStatus csrCreateRoamScanChannelList(tpAniSirGlobal pMac,
-                                                tANI_U8 *pChannelList,
-                                                tANI_U8 numChannels,
-                                                const eCsrBand eBand);
+                                        tANI_U8 sessionId,
+                                        tANI_U8 *pChannelList,
+                                        tANI_U8 numChannels,
+                                        const eCsrBand eBand);
 #endif
 
 ePhyChanBondState csrConvertCBIniValueToPhyCBState(v_U32_t cbIniValue);
@@ -345,12 +352,6 @@ eHalStatus csrPsOffloadIsFullPowerNeeded(tpAniSirGlobal pMac,
                                          tRequestFullPowerReason *pReason,
                                          tANI_BOOLEAN *pfNeedPower);
 
-#if defined(FEATURE_WLAN_ESE) && defined(FEATURE_WLAN_ESE_UPLOAD)
-eHalStatus csrCreateRoamScanChannelList(tpAniSirGlobal pMac,
-                                                tANI_U8 *pChannelList,
-                                                tANI_U8 numChannels,
-                                                const eCsrBand eBand);
-#endif
 void activeListCmdTimeoutHandle(void *userData);
 
 #endif //#if !defined( __SMEINSIDE_H )

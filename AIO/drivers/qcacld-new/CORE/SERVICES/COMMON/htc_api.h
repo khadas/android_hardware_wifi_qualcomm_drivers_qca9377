@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -66,6 +66,8 @@ struct ol_ath_htc_stats {
     int     htc_send_q_empty_count;
 };
 
+/* To resume HTT Tx queue during runtime resume */
+typedef void (*HTC_EP_RESUME_TX_QUEUE)(void *);
 /* per service connection send completion */
 typedef void   (*HTC_EP_SEND_PKT_COMPLETE)(void *,HTC_PACKET *);
 /* per service connection callback when a plurality of packets have been sent
@@ -141,6 +143,7 @@ typedef struct _HTC_EP_CALLBACKS {
     HTC_EP_RECV_REFILL       EpRecvRefill;  /* OPTIONAL receive re-fill callback for connected endpoint */
     HTC_EP_SEND_QUEUE_FULL   EpSendFull;    /* OPTIONAL send full callback */
     HTC_EP_RECV_ALLOC        EpRecvAlloc;   /* OPTIONAL recv allocation callback */
+    HTC_EP_RESUME_TX_QUEUE   EpResumeTxQueue; /*OPTIONAL for WMI. Needed for HTT Service */
     HTC_EP_RECV_ALLOC        EpRecvAllocThresh;  /* OPTIONAL recv allocation callback based on a threshold */
     HTC_EP_SEND_PKT_COMP_MULTIPLE EpTxCompleteMultiple; /* OPTIONAL completion handler for multiple complete
                                                              indications (EpTxComplete must be NULL) */
@@ -388,6 +391,17 @@ A_STATUS    HTCAddReceivePkt(HTC_HANDLE HTCHandle, HTC_PACKET *pPacket);
 A_STATUS    HTCConnectService(HTC_HANDLE HTCHandle,
                               HTC_SERVICE_CONNECT_REQ  *pReq,
                               HTC_SERVICE_CONNECT_RESP *pResp);
+
+/**
+ * htc_disconnect_service() - Disconnect to an HTC service
+ * @endpoint_id: endpoint id
+ *
+ * Service disconnection must be performed during htt_detach.
+ *
+ * Return: None
+ */
+void htc_disconnect_service(HTC_ENDPOINT_ID endpoint_id);
+
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @desc: HTC register log dump
   @function name: HTCDump
@@ -620,6 +634,18 @@ A_STATUS    HTCAddReceivePktMultiple(HTC_HANDLE HTCHandle, HTC_PACKET_QUEUE *pPk
 A_BOOL      HTCIsEndpointActive(HTC_HANDLE      HTCHandle,
                                 HTC_ENDPOINT_ID Endpoint);
 
+/*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+  @desc: Set up nodrop pkt flag for mboxping nodrop pkt
+  @function name: HTCIsEndpointActive
+  @input:  HTCHandle - HTC handle
+           isNodropPkt - indicates whether it is nodrop pkt
+  @output:
+  @return:
+  @notes:
+  @example:
+  @see also:
++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++*/
+void        HTCSetNodropPkt(HTC_HANDLE HTCHandle, A_BOOL isNodropPkt);
 
 /*+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
   @desc: Get the number of recv buffers currently queued into an HTC endpoint
@@ -673,20 +699,6 @@ struct ol_ath_htc_stats *ieee80211_ioctl_get_htc_stats(HTC_HANDLE HTCHandle);
 }
 #endif
 
-#ifdef QCA_WIFI_ISOC
-typedef struct s_htc_msg t_htc_msg;
-
-typedef void (*htc_msg_callback)(t_htc_msg *pMsg);
-
-struct s_htc_msg{
-	u16 type;
-	u16 reserved;
-	void *ptr;
-	u32 val;
-	htc_msg_callback callback;
-	void *pContext;
-};
-#endif
 void HTCGetControlEndpointTxHostCredits(HTC_HANDLE HTCHandle, int *credit);
 void HTC_dump_counter_info(HTC_HANDLE HTCHandle);
 void *htc_get_targetdef(HTC_HANDLE htc_handle);
@@ -705,5 +717,14 @@ void HTCIpaGetCEResource(HTC_HANDLE htc_handle,
 
 
 void HTCEndpointDumpCreditStats(HTC_HANDLE HTCHandle, HTC_ENDPOINT_ID Endpoint);
+void HTCDumpBundleStats(HTC_HANDLE HTCHandle);
+void HTCClearBundleStats(HTC_HANDLE HTCHandle);
 
+#ifdef FEATURE_RUNTIME_PM
+int htc_pm_runtime_get(HTC_HANDLE htc_handle);
+int htc_pm_runtime_put(HTC_HANDLE htc_handle);
+#else
+static inline int htc_pm_runtime_get(HTC_HANDLE htc_handle) { return 0; }
+static inline int htc_pm_runtime_put(HTC_HANDLE htc_handle) { return 0; }
+#endif
 #endif /* _HTC_API_H_ */

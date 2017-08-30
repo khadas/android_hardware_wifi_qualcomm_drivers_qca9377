@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -84,7 +84,7 @@ struct ol_txrx_stats_req {
 
 #define ol_txrx_debug(vdev, debug_specs) 0
 #define ol_txrx_fw_stats_cfg(vdev, type, val) 0
-#define ol_txrx_fw_stats_get(vdev, req) 0
+#define ol_txrx_fw_stats_get(vdev, req, response_expected) 0
 #define ol_txrx_aggr_cfg(vdev, max_subfrms_ampdu, max_subfrms_amsdu) 0
 
 #else /*---------------------------------------------------------------------*/
@@ -101,7 +101,8 @@ void ol_txrx_fw_stats_cfg(
 
 int ol_txrx_fw_stats_get(
     ol_txrx_vdev_handle vdev,
-    struct ol_txrx_stats_req *req);
+    struct ol_txrx_stats_req *req,
+    bool response_expected);
 
 
 int ol_txrx_aggr_cfg(ol_txrx_vdev_handle vdev,
@@ -141,6 +142,8 @@ void ol_txrx_peer_display(ol_txrx_peer_handle peer, int indent);
 #endif
 
 /*--- txrx stats display debug functions ---*/
+VOS_STATUS ol_txrx_stats(ol_txrx_vdev_handle vdev, char *buffer,
+                   unsigned length);
 
 #if TXRX_STATS_LEVEL != TXRX_STATS_LEVEL_OFF
 
@@ -149,8 +152,10 @@ void ol_txrx_stats_display(ol_txrx_pdev_handle pdev);
 int
 ol_txrx_stats_publish(ol_txrx_pdev_handle pdev, struct ol_txrx_stats *buf);
 
+void ol_txrx_stats_clear(ol_txrx_pdev_handle pdev);
 #else
 #define ol_txrx_stats_display(pdev)
+#define ol_txrx_stats_clear(pdev)
 #define ol_txrx_stats_publish(pdev, buf) TXRX_STATS_LEVEL_OFF
 #endif /* TXRX_STATS_LEVEL */
 
@@ -208,18 +213,20 @@ ol_rx_pn_trace_display(ol_txrx_pdev_handle pdev, int just_once);
 
 /*--- tx queue log debug feature ---*/
 /* uncomment this to enable the tx queue log feature */
-//#define ENABLE_TX_QUEUE_LOG 1
 
-#if defined(ENABLE_TX_QUEUE_LOG) && defined(CONFIG_HL_SUPPORT)
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
 
 void
 ol_tx_queue_log_display(ol_txrx_pdev_handle pdev);
 
+void ol_tx_queue_log_clear(ol_txrx_pdev_handle pdev);
+
 #else
 
 #define ol_tx_queue_log_display(pdev)
+#define ol_tx_queue_log_clear(pdev)
 
-#endif /* defined(ENABLE_TX_QUEUE_LOG) && defined(CONFIG_HL_SUPPORT) */
+#endif /* defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT) */
 
 #endif /* ATH_PERF_PWR_OFFLOAD  */ /*----------------------------------------*/
 

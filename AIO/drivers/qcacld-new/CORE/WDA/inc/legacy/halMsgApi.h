@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -38,6 +38,7 @@
 #define BSS_OPERATIONAL_MODE_AP     0
 #define BSS_OPERATIONAL_MODE_STA    1
 #define BSS_OPERATIONAL_MODE_IBSS   2
+#define BSS_OPERATIONAL_MODE_NDI    3
 
 /* STA entry type in add sta message */
 #define STA_ENTRY_SELF              0
@@ -48,6 +49,7 @@
 #ifdef FEATURE_WLAN_TDLS
 #define STA_ENTRY_TDLS_PEER         4
 #endif /* FEATURE_WLAN_TDLS */
+#define STA_ENTRY_NDI_PEER          5
 
 #define STA_ENTRY_TRANSMITTER       STA_ENTRY_SELF
 #define STA_ENTRY_RECEIVER          STA_ENTRY_OTHER
@@ -183,12 +185,6 @@ typedef struct
     tANI_U8 delBASupport;
     // delayed ba support... TBD
 
-#ifdef ANI_DVT_DEBUG
-    //These 6 fields are used only by DVT driver to pass selected
-    //rates to Softmac through HAL.
-    tANI_U8 primaryRateIndex, secondaryRateIndex, tertiaryRateIndex;
-    tANI_U8 primaryRateIndex40, secondaryRateIndex40, tertiaryRateIndex40;
-#endif
 
     // FIXME
     //Add these fields to message
@@ -315,6 +311,10 @@ typedef struct
      */
     tANI_U8  atimIePresent;
     tANI_U32 peerAtimWindowLength;
+    tANI_U8  nonRoamReassoc;
+    uint32_t nss; /* Number of spatial streams supported */
+    tANI_U8  max_amsdu_num;
+    uint8_t  channelwidth;
 } tAddStaParams, *tpAddStaParams;
 
 
@@ -538,6 +538,15 @@ typedef struct
     tANI_U8 reassocReq;    // Set only during roaming reassociation
     tANI_U16 chainMask;
     tANI_U16 smpsMode;
+    tANI_U8 dot11_mode;
+    tANI_U8 nonRoamReassoc;
+    uint8_t wps_state;
+    uint8_t nss_2g;
+    uint8_t nss_5g;
+    uint32_t tx_aggregation_size;
+    uint32_t rx_aggregation_size;
+    uint16_t beacon_tx_rate;
+    uint8_t  channelwidth;
 } tAddBssParams, * tpAddBssParams;
 
 typedef struct
@@ -633,12 +642,15 @@ typedef enum  eSmpsModeValue{
 // Msg Type = SIR_LIM_DELETE_STA_CONTEXT_IND
 //
 typedef struct {
+    bool        is_tdls;
+    tANI_U8     vdev_id;
     tANI_U16    assocId;
     tANI_U16    staId;
     tSirMacAddr bssId; // TO SUPPORT BT-AMP
                        // HAL copies bssid from the sta table.
     tSirMacAddr addr2;        //
     tANI_U16    reasonCode;   // To unify the keepalive / unknown A2 / tim-based disa
+    tANI_S8     rssi;
 } tDeleteStaContext, * tpDeleteStaContext;
 
 
@@ -733,31 +745,19 @@ typedef struct {
 
 #ifdef FEATURE_OEM_DATA_SUPPORT
 
-#ifndef OEM_DATA_REQ_SIZE
-#ifdef QCA_WIFI_2_0
-#define OEM_DATA_REQ_SIZE 280
-#else
-#define OEM_DATA_REQ_SIZE 134
-#endif
-#endif
-#ifndef OEM_DATA_RSP_SIZE
-#ifdef QCA_WIFI_2_0
-#define OEM_DATA_RSP_SIZE 1724
-#else
-#define OEM_DATA_RSP_SIZE 1968
-#endif
-#endif
-
 typedef struct
 {
     tSirMacAddr          selfMacAddr;
     eHalStatus           status;
-    tANI_U8              oemDataReq[OEM_DATA_REQ_SIZE];
+    uint32_t             data_len;
+    uint8_t              *data;
 } tStartOemDataReq, *tpStartOemDataReq;
 
 typedef struct
 {
-    tANI_U8             oemDataRsp[OEM_DATA_RSP_SIZE];
+    bool                target_rsp;
+    uint32_t            rsp_len;
+    uint8_t             *oem_data_rsp;
 } tStartOemDataRsp, *tpStartOemDataRsp;
 #endif
 
@@ -927,7 +927,8 @@ typedef struct
 #ifdef WLAN_FEATURE_11AC
 typedef struct
 {
-   tANI_U16   opMode;
+   tANI_U16  opMode;
+   tANI_U16  chanMode;
    tANI_U16  staId;
    tANI_U16  smesessionId;
    tSirMacAddr peer_mac;
@@ -1034,6 +1035,14 @@ typedef struct
     tANI_U8  isDfsChannel;
 
     tANI_U8  vhtCapable;
+
+    tANI_U8  dot11_mode;
+
+    uint8_t restart_on_chan_switch;
+
+    uint32_t channelwidth;
+
+    uint16_t reduced_beacon_interval;
 }tSwitchChannelParams, *tpSwitchChannelParams;
 
 typedef struct CSAOffloadParams {
@@ -1041,13 +1050,16 @@ typedef struct CSAOffloadParams {
    tANI_U8 switchmode;
    tANI_U8 sec_chan_offset;
    tANI_U8 new_ch_width;       /* New channel width */
+   tANI_U8 new_op_class;       /* New operating class */
    tANI_U8 new_ch_freq_seg1;   /* Channel Center frequency 1 */
    tANI_U8 new_ch_freq_seg2;   /* Channel Center frequency 2 */
+   tANI_U8 new_sub20_channelwidth;  /* 5MHz or 10Mhz channel width */
    tANI_U32 ies_present_flag;   /* WMI_CSA_EVENT_IES_PRESENT_FLAG */
    tSirMacAddr bssId;
 }*tpCSAOffloadParams, tCSAOffloadParams;
 
-typedef void (*tpSetLinkStateCallback)(tpAniSirGlobal pMac, void *msgParam );
+typedef void (*tpSetLinkStateCallback)(tpAniSirGlobal pMac, void *msgParam,
+		 bool status);
 
 typedef struct sLinkStateParams
 {
@@ -1061,6 +1073,7 @@ typedef struct sLinkStateParams
     int ft;
     void * session;
 #endif
+    v_BOOL_t status;
 } tLinkStateParams, * tpLinkStateParams;
 
 
@@ -1074,6 +1087,10 @@ typedef struct
 #ifdef FEATURE_WLAN_ESE
   tANI_U16         tsm_interval; // TSM interval period passed from lim to wda
 #endif
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+  tANI_U8          setRICparams;
+#endif
+  uint8_t          sme_session_id;
 } tAddTsParams, *tpAddTsParams;
 
 typedef struct
@@ -1083,6 +1100,10 @@ typedef struct
   tSirMacAddr bssId; //TO SUPPORT BT-AMP
   tANI_U8 sessionId;
   tANI_U8 userPrio;
+#ifdef WLAN_FEATURE_ROAM_OFFLOAD
+  tSirDeltsReqInfo delTsInfo;
+  tANI_U8 setRICparams;
+#endif
 } tDelTsParams, *tpDelTsParams;
 
 #ifdef WLAN_FEATURE_VOWIFI_11R
@@ -1108,7 +1129,6 @@ typedef tSirRetStatus (*tHalMsgCallback)(tpAniSirGlobal pMac, tANI_U32 mesgId, v
 typedef struct
 {
   tANI_U16 bssIdx;
-  tANI_BOOLEAN highPerformance;
   tSirMacEdcaParamRecord acbe; // best effort
   tSirMacEdcaParamRecord acbk; // background
   tSirMacEdcaParamRecord acvi; // video
@@ -1413,16 +1433,41 @@ typedef struct sMaxTxPowerPerBandParams
 
 typedef struct sAddStaSelfParams
 {
-   tSirMacAddr selfMacAddr;
-   tVOS_CON_MODE currDeviceMode;
+   tSirMacAddr     selfMacAddr;
+   tVOS_CON_MODE   currDeviceMode;
    tANI_U32        type;
    tANI_U32        subType;
    tANI_U8         sessionId;
-   tANI_U32 status;
+   tANI_U32        status;
+   tANI_U16        pkt_err_disconn_th;
+   uint8_t         nss_2g;
+   uint8_t         nss_5g;
+   uint32_t        tx_aggregation_size;
+   uint32_t        rx_aggregation_size;
 }tAddStaSelfParams, *tpAddStaSelfParams;
 
+/**
+ * struct set_ie_param - set IE params structure
+ * @pdev_id: pdev id
+ * @ie_type: IE type
+ * @nss: Nss value
+ * @ie_len: IE length
+ * @*ie_ptr: Pointer to IE data
+ *
+ * Holds the set pdev IE req data.
+ */
+struct set_ie_param {
+   uint8_t pdev_id;
+   uint8_t ie_type;
+   uint8_t nss;
+   uint8_t ie_len;
+   uint8_t *ie_ptr;
+};
+
+#define DOT11_HT_IE     1
+#define DOT11_VHT_IE    2
+
 #ifdef FEATURE_WLAN_TDLS
-#ifdef QCA_WIFI_2_0
 
 #define HAL_TDLS_MAX_SUPP_CHANNELS       128
 #define HAL_TDLS_MAX_SUPP_OPER_CLASSES   32
@@ -1441,6 +1486,7 @@ typedef struct {
    tANI_U8 peerOperClass[HAL_TDLS_MAX_SUPP_OPER_CLASSES];
    tANI_U8 prefOffChanNum;
    tANI_U8 prefOffChanBandwidth;
+   tANI_U8 opClassForPrefOffChan;
 } tTdlsPeerCapParams;
 
 typedef struct sTdlsPeerStateParams
@@ -1450,7 +1496,17 @@ typedef struct sTdlsPeerStateParams
    tANI_U32 peerState;
    tTdlsPeerCapParams peerCap;
 }tTdlsPeerStateParams;
-#endif /* QCA_WIFI_2_0 */
+
+typedef struct sTdlsChanSwitchParams
+{
+   tANI_U32    vdevId;
+   tSirMacAddr peerMacAddr;
+   tANI_U16    tdlsOffChBwOffset;/* Target Off Channel Bandwidth offset */
+   tANI_U8     tdlsOffCh;   /* Target Off Channel */
+   tANI_U8     tdlsSwMode;  /* TDLS Off Channel Mode */
+   tANI_U8     operClass;   /* Operating class corresponding to target channel */
+   tANI_U8     is_responder;/* responder or initiator */
+}tTdlsChanSwitchParams;
 #endif /* FEATURE_WLAN_TDLS */
 
 typedef struct sAbortScanParams
@@ -1497,13 +1553,11 @@ typedef struct sTdlsLinkEstablishParams
    tANI_U32  status;
 }tTdlsLinkEstablishParams, *tpTdlsLinkEstablishParams;
 
-#ifdef QCA_WIFI_2_0
 typedef struct tHalHiddenSsidVdevRestart
 {
    tANI_U8   ssidHidden;
    tANI_U8 sessionId;
 }tHalHiddenSsidVdevRestart,*tpHalHiddenSsidVdevRestart;
-#endif /* QCA_WIFI_2_0 */
 
 static inline void halGetTxTSFtimer(tpAniSirGlobal pMac,
                                                 tSirMacTimeStamp *pTime)
@@ -1581,6 +1635,7 @@ struct sap_offload_del_sta_req
 {
     tANI_U32 assoc_id;
     tANI_U32 reason_code;
+    tANI_U32 flags;
     tSirMacAddr sta_mac;
 };
 #endif /* SAP_AUTH_OFFLOAD */

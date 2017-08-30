@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2012-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -43,12 +43,19 @@
 #include <pktlog_ac_i.h>
 #include <pktlog_ac_fmt.h>
 #include <pktlog_ac.h>
+#include "i_vos_diag_core_log.h"
+#include "vos_diag_core_log.h"
+#include "aniGlobal.h"
 
 #define PKTLOG_TAG		"ATH_PKTLOG"
 #define PKTLOG_DEVNAME_SIZE	32
 #define MAX_WLANDEV		1
 
+#ifdef MULTI_IF_NAME
+#define PKTLOG_PROC_DIR		"ath_pktlog" MULTI_IF_NAME
+#else
 #define PKTLOG_PROC_DIR		"ath_pktlog"
+#endif
 
 /* Permissions for creating proc entries */
 #define PKTLOG_PROC_PERM	0444
@@ -92,7 +99,7 @@ static struct file_operations pktlog_fops = {
 
 static struct ol_pktlog_dev_t *get_pl_handle(struct ol_softc *scn)
 {
-	if (!scn)
+	if (!scn || !scn->pdev_txrx_handle)
 		return NULL;
 	return scn->pdev_txrx_handle->pl_dev;
 }
@@ -433,7 +440,7 @@ static int pktlog_attach(struct ol_softc *scn)
 	pl_dev = get_pl_handle(scn);
 
 	if (pl_dev != NULL) {
-		pl_info_lnx = kmalloc(sizeof(*pl_info_lnx), GFP_KERNEL);
+		pl_info_lnx = vos_mem_malloc(sizeof(*pl_info_lnx));
 		if (pl_info_lnx == NULL) {
 			printk(PKTLOG_TAG "%s:allocation failed for pl_info\n",
 			       __func__);
@@ -503,7 +510,7 @@ attach_fail2:
 
 attach_fail1:
 	if (pl_dev)
-		kfree(pl_dev->pl_info);
+		vos_mem_free(pl_dev->pl_info);
 	return -1;
 }
 
@@ -547,7 +554,7 @@ static void pktlog_detach(struct ol_softc *scn)
 		pktlog_release_buf(scn);
 
 	if (pl_dev) {
-		kfree(pl_info);
+		vos_mem_free(pl_info);
 		pl_dev->pl_info = NULL;
 	}
 }
@@ -568,6 +575,160 @@ static int pktlog_release(struct inode *i, struct file *f)
 #define MIN(a,b) (((a) < (b)) ? (a) : (b))
 #endif
 
+/**
+ * pktlog_read_proc_entry() - This function is used to read data from the
+ * proc entry into the readers buffer
+ * @buf:           Readers buffer
+ * @nbytes:        Number of bytes to read
+ * @ppos:          Offset within the drivers buffer
+ * @pl_info:       Packet log information pointer
+ * @read_complete: Boolean value indication whether read is complete
+ *
+ * This function is used to read data from the proc entry into the readers
+ * buffer. Its functionality is similar to 'pktlog_read' which does
+ * copy to user to the user space buffer
+ *
+ * Return: Number of bytes read from the buffer
+ *
+ */
+ssize_t
+pktlog_read_proc_entry(char *buf, size_t nbytes, loff_t *ppos,
+		       struct ath_pktlog_info *pl_info,
+		       bool *read_complete)
+{
+	size_t bufhdr_size;
+	size_t count = 0, ret_val = 0;
+	int rem_len;
+	int start_offset, end_offset;
+	int fold_offset, ppos_data, cur_rd_offset, cur_wr_offset;
+	struct ath_pktlog_buf *log_buf = pl_info->buf;
+
+	*read_complete = false;
+
+	if (log_buf == NULL) {
+		*read_complete = true;
+		return 0;
+	}
+
+	if (*ppos == 0 && pl_info->log_state) {
+		pl_info->saved_state = pl_info->log_state;
+		pl_info->log_state = 0;
+	}
+
+	bufhdr_size = sizeof(log_buf->bufhdr);
+
+	/* copy valid log entries from circular buffer into user space */
+	rem_len = nbytes;
+	count = 0;
+
+	if (*ppos < bufhdr_size) {
+		count = MIN((bufhdr_size - *ppos), rem_len);
+		vos_mem_copy(buf, ((char *)&log_buf->bufhdr) + *ppos,
+			     count);
+		rem_len -= count;
+		ret_val += count;
+	}
+
+	start_offset = log_buf->rd_offset;
+	cur_wr_offset = log_buf->wr_offset;
+
+	if ((rem_len == 0) || (start_offset < 0))
+		goto rd_done;
+
+	fold_offset = -1;
+	cur_rd_offset = start_offset;
+
+	/* Find the last offset and fold-offset if the buffer is folded */
+	do {
+		struct ath_pktlog_hdr *log_hdr;
+		int log_data_offset;
+
+		log_hdr = (struct ath_pktlog_hdr *) (log_buf->log_data +
+			  cur_rd_offset);
+
+		log_data_offset = cur_rd_offset + sizeof(struct ath_pktlog_hdr);
+
+		if ((fold_offset == -1)
+		    && ((pl_info->buf_size - log_data_offset)
+		    <= log_hdr->size))
+			fold_offset = log_data_offset - 1;
+
+		PKTLOG_MOV_RD_IDX(cur_rd_offset, log_buf, pl_info->buf_size);
+
+		if ((fold_offset == -1) && (cur_rd_offset == 0)
+		    && (cur_rd_offset != cur_wr_offset))
+			fold_offset = log_data_offset + log_hdr->size - 1;
+
+		end_offset = log_data_offset + log_hdr->size - 1;
+	} while (cur_rd_offset != cur_wr_offset);
+
+	ppos_data = *ppos + ret_val - bufhdr_size + start_offset;
+
+	if (fold_offset == -1) {
+		if (ppos_data > end_offset)
+			goto rd_done;
+
+		count = MIN(rem_len, (end_offset - ppos_data + 1));
+		vos_mem_copy(buf + ret_val,
+			     log_buf->log_data + ppos_data,
+			     count);
+		ret_val += count;
+		rem_len -= count;
+	} else {
+		if (ppos_data <= fold_offset) {
+			count = MIN(rem_len, (fold_offset - ppos_data + 1));
+			vos_mem_copy(buf + ret_val,
+				     log_buf->log_data + ppos_data,
+				     count);
+			ret_val += count;
+			rem_len -= count;
+		}
+
+		if (rem_len == 0)
+			goto rd_done;
+
+		ppos_data =
+			*ppos + ret_val - (bufhdr_size +
+			(fold_offset - start_offset + 1));
+
+		if (ppos_data <= end_offset) {
+			count = MIN(rem_len, (end_offset - ppos_data + 1));
+			vos_mem_copy(buf + ret_val,
+				     log_buf->log_data + ppos_data,
+				     count);
+			ret_val += count;
+			rem_len -= count;
+		}
+	}
+
+rd_done:
+	if ((ret_val < nbytes) && pl_info->saved_state) {
+		pl_info->log_state = pl_info->saved_state;
+		pl_info->saved_state = 0;
+	}
+	*ppos += ret_val;
+
+	if (ret_val == 0) {
+		PKTLOG_LOCK(pl_info);
+		/* Write pointer might have been updated during the read.
+		 * So, if some data is written into, lets not reset the pointers.
+		 * We can continue to read from the offset position
+		 */
+		if (cur_wr_offset != log_buf->wr_offset) {
+			*read_complete = false;
+		} else {
+			pl_info->buf->rd_offset = -1;
+			pl_info->buf->wr_offset = 0;
+			pl_info->buf->bytes_written = 0;
+			pl_info->buf->offset = PKTLOG_READ_OFFSET;
+			*read_complete = true;
+		}
+		PKTLOG_UNLOCK(pl_info);
+	}
+
+	return ret_val;
+}
+
 static ssize_t
 pktlog_read(struct file *file, char *buf, size_t nbytes, loff_t *ppos)
 {
@@ -578,7 +739,7 @@ pktlog_read(struct file *file, char *buf, size_t nbytes, loff_t *ppos)
 	int fold_offset, ppos_data, cur_rd_offset;
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	struct ath_pktlog_info *pl_info = (struct ath_pktlog_info *)
-					  PDE_DATA(file->f_dentry->d_inode);
+					  PDE_DATA(file->f_path.dentry->d_inode);
 #else
 	struct proc_dir_entry *proc_entry = PDE(file->f_dentry->d_inode);
 	struct ath_pktlog_info *pl_info = (struct ath_pktlog_info *)
@@ -766,7 +927,11 @@ int pktlog_fault(struct vm_area_struct *vma, struct vm_fault *vmf)
 
 	get_page(virt_to_page((void *)address));
 	vmf->page = virt_to_page((void *)address);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+	return 0;
+#else
 	return VM_FAULT_MINOR;
+#endif
 }
 #else
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
@@ -798,7 +963,11 @@ struct page *pktlog_vmmap(struct vm_area_struct *vma, unsigned long addr,
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,0)
 	if (type)
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,6,0)
+		*type = 0;
+#else
 		*type = VM_FAULT_MINOR;
+#endif
 #endif
 
 	return virt_to_page((void *)vaddr);
@@ -819,7 +988,7 @@ static int pktlog_mmap(struct file *file, struct vm_area_struct *vma)
 {
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 	struct ath_pktlog_info *pl_info = (struct ath_pktlog_info *)
-					  PDE_DATA(file->f_dentry->d_inode);
+					  PDE_DATA(file->f_path.dentry->d_inode);
 #else
 	struct proc_dir_entry *proc_entry = PDE(file->f_dentry->d_inode);
 	struct ath_pktlog_info *pl_info = (struct ath_pktlog_info *)
@@ -862,6 +1031,7 @@ int pktlogmod_init(void *context)
 
 attach_fail:
 	remove_proc_entry(PKTLOG_PROC_DIR, NULL);
+	g_pktlog_pde = NULL;
 	return ret;
 }
 
@@ -870,15 +1040,19 @@ void pktlogmod_exit(void *context)
 	struct ol_softc *scn = (struct ol_softc *)context;
 	struct ol_pktlog_dev_t *pl_dev = get_pl_handle(scn);
 
-	if (!pl_dev)
+	if (!pl_dev || g_pktlog_pde == NULL) {
+		printk("%s: pldev or g_pktlog_pde is NULL\n", __func__);
 		return;
+	}
 
 	/*
 	 * pktlog already be detached
 	 * avoid to detach and remove proc entry again
 	 */
-	if (!pl_dev->pl_info)
+	if (!pl_dev->pl_info) {
+		printk("%s: pldev pl_info is NULL\n", __func__);
 		return;
+	}
 
 	/*
 	 *  Disable firmware side pktlog function

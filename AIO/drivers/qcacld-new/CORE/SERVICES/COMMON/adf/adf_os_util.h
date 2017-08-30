@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011,2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -90,6 +90,14 @@
  * @brief warn & dump backtrace if expr evaluates true
  */
 #define adf_os_warn(expr)           __adf_os_warn(expr)
+
+/**
+ * adf_os_is_pwr2 - test input value is power of 2 integer
+ * @value: input integer
+ *
+ */
+#define ADF_OS_IS_PWR2(value) (((value) ^ ((value)-1)) == ((value) << 1) - 1)
+
 /**
  * @brief supply pseudo-random numbers
  */
@@ -129,6 +137,74 @@ static adf_os_inline a_uint32_t
 adf_os_int_sqrt(a_uint32_t x)
 {
 	return __adf_os_int_sqrt(x);
+}
+
+/**
+ * @brief initialize completion structure
+ *
+ * @param[in] ptr - completion structure
+ */
+static inline void
+adf_os_init_completion(adf_os_comp_t *ptr)
+{
+    __adf_os_init_completion(ptr);
+}
+
+/**
+ * @brief re-initialize completion structure
+ *
+ * @param[in] comp - completion structure
+ */
+static inline void
+adf_os_re_init_completion(adf_os_comp_t comp)
+{
+	__adf_os_re_init_completion(comp);
+}
+
+/**
+ * @brief wait for completion till timeout
+ * @param[in] ptr - completion structure
+ * @param[in] timeout - timeout value in jiffies
+ *
+ * @Return: 0 if timed out, and positive on completion
+ */
+static inline unsigned long
+adf_os_wait_for_completion_timeout(adf_os_comp_t *ptr, unsigned long timeout)
+{
+    return  __adf_os_wait_for_completion_timeout(ptr, timeout);
+}
+
+/**
+ * @brief wake up the thread waiting for this completion
+ *
+ * @param[in] ptr - completion structure
+ */
+static inline void
+adf_os_complete(adf_os_comp_t *ptr)
+{
+    __adf_os_complete(ptr);
+}
+
+/**
+ * adf_os_get_pwr2() - get next power of 2 integer from input value
+ * @value: input value to find next power of 2 integer
+ *
+ * Get next power of 2 integer from input value
+ *
+ * Return: Power of 2 integer
+ */
+static inline int adf_os_get_pwr2(int value)
+{
+	int log2;
+	if (ADF_OS_IS_PWR2(value))
+		return value;
+
+	log2 = 0;
+	while (value) {
+		value >>= 1;
+		log2++;
+	}
+	return 1 << log2;
 }
 
 #endif /*_ADF_OS_UTIL_H*/

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2014, 2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -54,11 +54,11 @@ eHalStatus csrMsgProcessor( tpAniSirGlobal pMac,  void *pMsgBuf )
 #endif
 
     smsLog(pMac, LOG2, FL("Message %d[0x%04X] received in curState %s"
-           " and substate %s"),
+           " and substate %s sessionId (%d)"),
            pSmeRsp->messageType, pSmeRsp->messageType,
            macTraceGetcsrRoamState(pMac->roam.curState[pSmeRsp->sessionId]),
            macTraceGetcsrRoamSubState(
-           pMac->roam.curSubState[pSmeRsp->sessionId]));
+           pMac->roam.curSubState[pSmeRsp->sessionId]), pSmeRsp->sessionId);
 
 #ifdef FEATURE_WLAN_SCAN_PNO
     /*
@@ -132,7 +132,8 @@ eHalStatus csrMsgProcessor( tpAniSirGlobal pMac,  void *pMsgBuf )
             * workable due to failure or finding the condition meets both SAP and infra/IBSS requirement.
             */
             if( (eWNI_SME_SETCONTEXT_RSP == pSmeRsp->messageType) ||
-                (eWNI_SME_REMOVEKEY_RSP == pSmeRsp->messageType) )
+                (eWNI_SME_REMOVEKEY_RSP == pSmeRsp->messageType) ||
+                (pSmeRsp->messageType == eWNI_SME_FT_PRE_AUTH_RSP))
             {
                 smsLog(pMac, LOGW, FL(" handling msg 0x%X CSR state is %d"), pSmeRsp->messageType, pMac->roam.curState[pSmeRsp->sessionId]);
                 csrRoamCheckForLinkStatusChange(pMac, pSmeRsp);
@@ -158,7 +159,20 @@ eHalStatus csrMsgProcessor( tpAniSirGlobal pMac,  void *pMsgBuf )
             }
             else
             {
-                smsLog(pMac, LOGW, "  Message 0x%04X is not handled by CSR. CSR state is %d ", pSmeRsp->messageType, pMac->roam.curState[pSmeRsp->sessionId]);
+               smsLog(pMac, LOGE, "Message 0x%04X is not handled by CSR "
+                  " CSR state is %d session Id %d", pSmeRsp->messageType,
+                   pMac->roam.curState[pSmeRsp->sessionId], pSmeRsp->sessionId);
+
+                if (eWNI_SME_FT_PRE_AUTH_RSP == pSmeRsp->messageType) {
+                    smsLog(pMac, LOGE, "Dequeue eSmeCommandRoam command"
+                       " with reason eCsrPerformPreauth");
+                    csrDequeueRoamCommand(pMac, eCsrPerformPreauth);
+                }
+                else if (eWNI_SME_REASSOC_RSP == pSmeRsp->messageType) {
+                    smsLog(pMac, LOGE, "Dequeue eSmeCommandRoam command"
+                       " with reason eCsrSmeIssuedFTReassoc");
+                    csrDequeueRoamCommand(pMac, eCsrSmeIssuedFTReassoc);
+                }
             }
             break;
         }

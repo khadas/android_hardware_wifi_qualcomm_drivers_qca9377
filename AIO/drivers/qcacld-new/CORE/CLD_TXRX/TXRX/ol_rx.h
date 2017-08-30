@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -63,10 +63,21 @@ ol_rx_in_order_deliver(
     unsigned tid,
     adf_nbuf_t head_msdu);
 
+void ol_rx_log_packet(htt_pdev_handle htt_pdev,
+    uint8_t peer_id, adf_nbuf_t msdu);
+
 void
 ol_rx_offload_paddr_deliver_ind_handler(
    htt_pdev_handle htt_pdev,
    u_int32_t msdu_count,
    u_int32_t * msg_word );
+
+void
+ol_rx_mic_error_handler(
+    ol_txrx_pdev_handle pdev,
+    u_int8_t tid,
+    u_int16_t peer_id,
+    void * msdu_desc,
+    adf_nbuf_t msdu );
 
 #endif /* _OL_RX__H_ */

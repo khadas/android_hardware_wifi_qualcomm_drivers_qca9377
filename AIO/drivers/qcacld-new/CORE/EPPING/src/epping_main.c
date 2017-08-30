@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -20,12 +20,10 @@
  */
 
 /*
- * Copyright (c) 2014 Qualcomm Atheros, Inc.
- * All Rights Reserved.
- * Qualcomm Atheros Confidential and Proprietary.
- *
+ * This file was originally distributed by Qualcomm Atheros, Inc.
+ * under proprietary terms before Copyright ownership was assigned
+ * to the Linux Foundation.
  */
-
 
 /*========================================================================
 
@@ -45,10 +43,8 @@
 #include <linux/firmware.h>
 #include <wcnss_api.h>
 #include <wlan_hdd_tx_rx.h>
-#include <palTimer.h>
 #include <wniApi.h>
 #include <wlan_nlink_srv.h>
-#include <wlan_btc_svc.h>
 #include <wlan_hdd_cfg.h>
 #include <wlan_ptt_sock_svc.h>
 #include <wlan_hdd_wowl.h>
@@ -107,6 +103,7 @@ int epping_driver_init(int con_mode, vos_wake_lock_t *g_wake_lock,
                        char *pwlan_module_name)
 {
    int ret = 0;
+   unsigned long rc;
    epping_context_t *pEpping_ctx = NULL;
    VOS_STATUS status = VOS_STATUS_SUCCESS;
 
@@ -117,6 +114,7 @@ int epping_driver_init(int con_mode, vos_wake_lock_t *g_wake_lock,
 #endif
 #ifdef MEMORY_DEBUG
    vos_mem_init();
+   adf_net_buf_debug_init();
 #endif
 
    pEpping_ctx = vos_mem_malloc(sizeof(epping_context_t));
@@ -151,10 +149,10 @@ int epping_driver_init(int con_mode, vos_wake_lock_t *g_wake_lock,
    init_completion(&pEpping_ctx->wlan_start_comp);
    ret = hif_register_driver();
    if (!ret) {
-      ret = wait_for_completion_interruptible_timeout(
+      rc = wait_for_completion_timeout(
                &pEpping_ctx->wlan_start_comp,
                msecs_to_jiffies(WLAN_WAIT_TIME_WLANSTART));
-      if (!ret) {
+      if (!rc) {
          EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
             "%s: timed-out waiting for hif_register_driver", __func__);
          ret = -1;
@@ -172,6 +170,7 @@ int epping_driver_init(int con_mode, vos_wake_lock_t *g_wake_lock,
       vos_mem_free(pEpping_ctx);
 
 #ifdef MEMORY_DEBUG
+      adf_net_buf_debug_exit();
       vos_mem_exit();
 #endif
 #ifdef TIMER_MANAGER
@@ -189,6 +188,7 @@ error1:
       pEpping_ctx = NULL;
    }
 #ifdef MEMORY_DEBUG
+   adf_net_buf_debug_exit();
    vos_mem_exit();
 #endif
 #ifdef TIMER_MANAGER
@@ -234,13 +234,11 @@ void epping_exit(v_CONTEXT_t pVosContext)
    }
 #endif /* HIF_PCI */
    epping_cookie_cleanup(pEpping_ctx);
-   vos_mem_free(pEpping_ctx);
 }
 
 void epping_driver_exit(v_CONTEXT_t pVosContext)
 {
    epping_context_t *pEpping_ctx;
-   adf_os_device_t adf_ctx;
 
    pr_info("%s: unloading driver\n", __func__);
 
@@ -253,21 +251,14 @@ void epping_driver_exit(v_CONTEXT_t pVosContext)
    }
    else
    {
-#ifdef QCA_PKT_PROTO_TRACE
-      vos_pkt_proto_trace_close();
-#endif /* QCA_PKT_PROTO_TRACE */
-      //pHddCtx->isUnloadInProgress = TRUE;
+      vos_set_unload_in_progress(TRUE);
       vos_set_load_unload_in_progress(VOS_MODULE_ID_VOSS, TRUE);
    }
    hif_unregister_driver();
-   /*
-    * ADF context cannot be freed in hdd_wlan_exit for discrete
-    * as it is needed in PCI remove. So free it here.
-    */
-   adf_ctx = vos_get_context(VOS_MODULE_ID_ADF, pVosContext);
-   vos_mem_free(adf_ctx);
+   vos_mem_free(pEpping_ctx);
    vos_preClose( &pVosContext );
 #ifdef MEMORY_DEBUG
+   adf_net_buf_debug_exit();
    vos_mem_exit();
 #endif
 #ifdef TIMER_MANAGER
@@ -297,10 +288,10 @@ int epping_wlan_startup(struct device *parent_dev, v_VOID_t *hif_sc)
    int ret = 0;
    epping_context_t *pEpping_ctx = NULL;
    VosContextType *pVosContext = NULL;
-   adf_os_device_t adf_ctx;
    HTC_INIT_INFO  htcInfo;
    struct ol_softc *scn;
    tSirMacAddr adapter_macAddr;
+   adf_os_device_t adf_ctx;
 
    EPPING_LOG(VOS_TRACE_LEVEL_INFO_HIGH, "%s: Enter", __func__);
 
@@ -325,22 +316,10 @@ int epping_wlan_startup(struct device *parent_dev, v_VOID_t *hif_sc)
    pEpping_ctx->parent_dev = (void *)parent_dev;
    epping_get_dummy_mac_addr(adapter_macAddr);
 
-   /* Initialize the adf_ctx handle */
-   adf_ctx = vos_mem_malloc(sizeof(*adf_ctx));
-
-   if (!adf_ctx) {
-      EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
-                 "%s: Failed to allocate adf_ctx", __func__);
-      ret = -1;
-      return ret;
-   }
-   vos_mem_zero(adf_ctx, sizeof(*adf_ctx));
-   hif_init_adf_ctx(adf_ctx, hif_sc);
    ((VosContextType*)pVosContext)->pHIFContext = hif_sc;
 
    /* store target type and target version info in hdd ctx */
    pEpping_ctx->target_type = ((struct ol_softc *)hif_sc)->target_type;
-   ((VosContextType*)(pVosContext))->adf_ctx = adf_ctx;
 
    /* Initialize the timer module */
    vos_timer_module_init();
@@ -379,6 +358,11 @@ int epping_wlan_startup(struct device *parent_dev, v_VOID_t *hif_sc)
       return -1;
    }
    pEpping_ctx->HTCHandle = vos_get_context(VOS_MODULE_ID_HTC, pVosContext);
+   if (pEpping_ctx->HTCHandle == NULL) {
+      EPPING_LOG(VOS_TRACE_LEVEL_FATAL,
+         "%s: HTCHandle is NULL", __func__);
+      return -1;
+   }
    scn->htc_handle = pEpping_ctx->HTCHandle;
 
    HIFClaimDevice(scn->hif_hdl, scn);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2013-2014, 2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -58,7 +58,7 @@ __adf_os_mem_alloc(adf_os_device_t osdev, size_t size)
 {
     int flags = GFP_KERNEL;
 
-    if(in_interrupt() || irqs_disabled())
+    if (in_interrupt() || irqs_disabled() || in_atomic())
         flags = GFP_ATOMIC;
 
     return kzalloc(size, flags);
@@ -174,21 +174,6 @@ static inline a_int32_t
 __adf_os_str_cmp(const char *str1, const char *str2)
 {
     return strcmp(str1, str2);
-}
-
-/**
- * @brief Copy from one string to another
- *
- * @param[in] dest  destination string
- * @param[in] src   source string
- * @param[in] bytes limit of num bytes to copy
- *
- * @retval    0     returns the initial value of dest
- */
-static inline char *
-__adf_os_str_ncopy(char *dest, const char *src, a_uint32_t bytes)
-{
-    return strncpy(dest, src, bytes);
 }
 
 /**

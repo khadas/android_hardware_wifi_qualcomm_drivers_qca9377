@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2013 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011-2017 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -38,11 +38,13 @@
 #include <ol_htt_rx_api.h>     /* htt_rx_peer_id, etc. */
 
 /* internal API header files */
+#include <ol_txrx.h>           /* ol_txrx_peer_unref_delete */
 #include <ol_txrx_types.h>     /* ol_txrx_vdev_t, etc. */
 #include <ol_txrx_peer_find.h> /* ol_txrx_peer_find_by_id */
 #include <ol_rx_reorder.h>     /* ol_rx_reorder_store, etc. */
 #include <ol_rx_reorder_timeout.h> /* OL_RX_REORDER_TIMEOUT_UPDATE */
 #include <ol_rx_defrag.h>      /* ol_rx_defrag_waitlist_flush */
+#include <ol_rx_fwd.h>             /* ol_rx_fwd_check, etc. */
 #include <ol_txrx_internal.h>
 #include <wdi_event.h>
 #ifdef QCA_SUPPORT_SW_TXRX_ENCAP
@@ -52,17 +54,17 @@
 /* FIX THIS: txrx should not include private header files of other modules */
 #include <htt_types.h>
 #include <ol_if_athvar.h>
-#include <if_llc.h>
 #include <enet.h>    /* ethernet + SNAP/LLC header defs and ethertype values */
 #include <ip_prot.h> /* IP protocol values */
 #include <ipv4.h>    /* IPv4 header defs */
 #include <ipv6_defs.h>    /* IPv6 header defs */
 #include <ol_vowext_dbg_defs.h>
+#include <wma.h>
+#include "pktlog_ac_fmt.h"
+#include "adf_trace.h"
 
 #ifdef HTT_RX_RESTORE
-#if defined(QCA_WIFI_2_0) && !defined(QCA_WIFI_ISOC) && defined(CONFIG_CNSS)
-#include <net/cnss.h>
-#endif
+#include "vos_cnss.h"
 #endif
 
 #ifdef OSIF_NEED_RX_PEER_ID
@@ -77,9 +79,19 @@
 
 static void ol_rx_restore_handler(struct work_struct *htt_rx)
 {
-    adf_os_print("Enter: %s", __func__);
-    cnss_device_self_recovery();
-    adf_os_print("Exit: %s", __func__);
+    adf_os_device_t adf_ctx;
+    VosContextType *pvoscontext = NULL;
+
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO,
+        "Enter: %s", __func__);
+
+    pvoscontext = vos_get_global_context(VOS_MODULE_ID_SYS, NULL);
+    adf_ctx = vos_get_context(VOS_MODULE_ID_ADF, pvoscontext);
+    if (adf_ctx)
+       vos_device_self_recovery(adf_ctx->dev);
+
+    VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO,
+        "Exit: %s", __func__);
 }
 
 static DECLARE_WORK(ol_rx_restore_work, ol_rx_restore_handler);
@@ -91,17 +103,35 @@ void ol_rx_trigger_restore(htt_pdev_handle htt_pdev, adf_nbuf_t head_msdu,
 
     while (head_msdu) {
         next = adf_nbuf_next(head_msdu);
-        adf_os_print("freeing %p\n", head_msdu);
+        VOS_TRACE(VOS_MODULE_ID_TXRX, VOS_TRACE_LEVEL_INFO,
+            "freeing %p\n", head_msdu);
         adf_nbuf_free(head_msdu);
         head_msdu = next;
     }
 
     if ( !htt_pdev->rx_ring.htt_rx_restore){
+        vos_set_logp_in_progress(VOS_MODULE_ID_VOSS, TRUE);
         htt_pdev->rx_ring.htt_rx_restore = 1;
         schedule_work(&ol_rx_restore_work);
     }
 }
 #endif
+
+void ol_rx_reset_pn_replay_counters(struct ol_txrx_pdev_t *pdev)
+{
+    adf_os_mem_zero(pdev->pn_replays,
+                    OL_RX_NUM_PN_REPLAY_TYPES * sizeof(uint32_t));
+}
+
+uint32_t ol_rx_get_tkip_replay_counter(struct ol_txrx_pdev_t *pdev)
+{
+    return pdev->pn_replays[OL_RX_TKIP_REPLAYS];
+}
+
+uint32_t ol_rx_get_ccmp_replay_counter(struct ol_txrx_pdev_t *pdev)
+{
+    return pdev->pn_replays[OL_RX_CCMP_REPLAYS];
+}
 
 static void ol_rx_process_inv_peer(
     ol_txrx_pdev_handle pdev,
@@ -196,6 +226,79 @@ OL_RX_MPDU_RSSI_UPDATE(
 #define OL_RX_MPDU_RSSI_UPDATE(peer, rx_mpdu_desc) /* no-op */
 #endif /* QCA_SUPPORT_PEER_DATA_RX_RSSI */
 
+/**
+ * ol_rx_mon_indication_handler() - htt rx indication message handler
+ * for HL monitor mode.
+ * @pdev: pointer to struct ol_txrx_pdev_handle
+ * @rx_ind_msg:      htt rx indication message
+ * @peer_id:         peer id
+ * @tid:             tid
+ * @num_mpdu_ranges: number of mpdu ranges
+ *
+ * This function pops amsdu from rx indication message and directly
+ * deliver to upper layer.
+ */
+void
+ol_rx_mon_indication_handler(
+	ol_txrx_pdev_handle pdev,
+	adf_nbuf_t rx_ind_msg,
+	u_int16_t peer_id,
+	u_int8_t tid,
+	int num_mpdu_ranges)
+{
+	int mpdu_range;
+	struct ol_txrx_peer_t *peer;
+	htt_pdev_handle htt_pdev;
+	struct ol_txrx_vdev_t *vdev = NULL;
+
+	htt_pdev = pdev->htt_pdev;
+
+	adf_os_spin_lock_bh(&pdev->peer_ref_mutex);
+	peer = pdev->self_peer;
+	if (peer) {
+		adf_os_atomic_inc(&peer->ref_cnt);
+		vdev = peer->vdev;
+	}
+	adf_os_spin_unlock_bh(&pdev->peer_ref_mutex);
+
+	for (mpdu_range = 0; mpdu_range < num_mpdu_ranges; mpdu_range++) {
+		enum htt_rx_status status;
+		int i, num_mpdus;
+		adf_nbuf_t head_msdu, tail_msdu;
+
+		htt_rx_ind_mpdu_range_info(
+			pdev->htt_pdev,
+			rx_ind_msg,
+			mpdu_range,
+			&status,
+			&num_mpdus);
+
+		TXRX_STATS_ADD(pdev, priv.rx.normal.mpdus, num_mpdus);
+
+		for (i = 0; i < num_mpdus; i++) {
+			htt_rx_amsdu_pop(
+				htt_pdev, rx_ind_msg, &head_msdu, &tail_msdu);
+			if (peer && vdev) {
+				peer->rx_opt_proc(vdev, peer, tid, head_msdu);
+			} else {
+				while (1) {
+					adf_nbuf_t next;
+					next = adf_nbuf_next(head_msdu);
+					htt_rx_desc_frame_free(
+						htt_pdev,
+						head_msdu);
+					if (head_msdu == tail_msdu)
+						break;
+					head_msdu = next;
+				}
+			}
+		}
+	}
+
+	if (peer)
+		ol_txrx_peer_unref_delete(peer);
+}
+
 void
 ol_rx_indication_handler(
     ol_txrx_pdev_handle pdev,
@@ -204,18 +307,46 @@ ol_rx_indication_handler(
     u_int8_t tid,
     int num_mpdu_ranges)
 {
-    int mpdu_range;
+    int mpdu_range, i;
     unsigned seq_num_start = 0, seq_num_end = 0;
     a_bool_t rx_ind_release = A_FALSE;
     struct ol_txrx_vdev_t *vdev = NULL;
     struct ol_txrx_peer_t *peer;
     htt_pdev_handle htt_pdev;
+    uint16_t center_freq;
+    uint16_t chan1;
+    uint16_t chan2;
+    uint8_t phymode;
+    a_bool_t ret;
 
     htt_pdev = pdev->htt_pdev;
     peer = ol_txrx_peer_find_by_id(pdev, peer_id);
+    if (!peer) {
+        /* If we can't find a peer send this packet to OCB interface using
+           OCB self peer */
+        if (!ol_txrx_get_ocb_peer(pdev, &peer))
+			peer = NULL;
+    }
+
     if (peer) {
         vdev = peer->vdev;
         OL_RX_IND_RSSI_UPDATE(peer, rx_ind_msg);
+
+        if (vdev->opmode == wlan_op_mode_ocb) {
+            htt_rx_ind_legacy_rate(pdev->htt_pdev, rx_ind_msg,
+                                   &peer->last_pkt_legacy_rate,
+                                   &peer->last_pkt_legacy_rate_sel);
+            peer->last_pkt_rssi_cmb = htt_rx_ind_rssi_dbm(pdev->htt_pdev,
+                                                          rx_ind_msg);
+            for (i = 0; i < 4; i++)
+                peer->last_pkt_rssi[i] = htt_rx_ind_rssi_dbm_chain(
+                    pdev->htt_pdev, rx_ind_msg, i);
+            htt_rx_ind_timestamp(pdev->htt_pdev, rx_ind_msg,
+                                 &peer->last_pkt_timestamp_microsec,
+                                 &peer->last_pkt_timestamp_submicrosec);
+            peer->last_pkt_tsf = htt_rx_ind_tsf32(pdev->htt_pdev, rx_ind_msg);
+            peer->last_pkt_tid = htt_rx_ind_ext_tid(pdev->htt_pdev, rx_ind_msg);
+        }
     }
 
     TXRX_STATS_INCR(pdev, priv.rx.normal.ppdus);
@@ -237,6 +368,8 @@ ol_rx_indication_handler(
             ol_rx_reorder_flush(
                 vdev, peer, tid, seq_num_start,
                 seq_num_end, htt_rx_flush_release);
+            ol_rx_reorder_update_history(peer, reorder_flush, tid,
+                 seq_num_start, seq_num_end, 0);
         }
     }
 
@@ -298,7 +431,7 @@ ol_rx_indication_handler(
 
                 msdu_chaining = htt_rx_amsdu_pop(
                     htt_pdev, rx_ind_msg, &head_msdu, &tail_msdu);
-#ifdef HTT_RX_RESET
+#ifdef HTT_RX_RESTORE
                 if (htt_pdev->rx_ring.rx_reset) {
                     ol_rx_trigger_restore(htt_pdev, head_msdu, tail_msdu);
                     return;
@@ -306,6 +439,13 @@ ol_rx_indication_handler(
 #endif
                 rx_mpdu_desc =
                     htt_rx_mpdu_desc_list_next(htt_pdev, rx_ind_msg);
+                ret = htt_rx_msdu_center_freq(htt_pdev, peer, rx_mpdu_desc,
+                                              &center_freq, &chan1, &chan2, &phymode);
+                if (ret == A_TRUE) {
+                        peer->last_pkt_center_freq = center_freq;
+                } else {
+                        peer->last_pkt_center_freq = 0;
+                }
 
                 /* Pktlog */
     #ifdef WDI_EVENT_ENABLE
@@ -355,8 +495,9 @@ ol_rx_indication_handler(
                      *     allows the host to discard it, rather than sending
                      *     it out of order.
                      */
-                    mpdu_status = OL_RX_REORDER_SEQ_NUM_CHECK(
+                    mpdu_status = OL_RX_SEQ_NUM_CHECK(
                         pdev, peer, tid, rx_mpdu_desc);
+
                     if (mpdu_status != htt_rx_status_ok) {
                         /*
                          * If the sequence number was out of bounds,
@@ -395,6 +536,8 @@ ol_rx_indication_handler(
                     } else {
                         ol_rx_reorder_store(
                             pdev, peer, tid, reorder_idx, head_msdu, tail_msdu);
+                        ol_rx_reorder_update_history(peer, reorder_store, tid,
+                            0, 0, reorder_idx);
                         if (peer->tids_rx_reorder[tid].win_sz_mask == 0) {
                             peer->tids_last_seq[tid] =
                                          htt_rx_mpdu_desc_seq_num(htt_pdev,
@@ -477,6 +620,8 @@ ol_rx_indication_handler(
 
     if ((A_TRUE == rx_ind_release) && peer && vdev) {
         ol_rx_reorder_release(vdev, peer, tid, seq_num_start, seq_num_end);
+        ol_rx_reorder_update_history(peer, reorder_release, tid, seq_num_start,
+                   seq_num_end, 0);
     }
     OL_RX_REORDER_TIMEOUT_UPDATE(peer, tid);
     OL_RX_REORDER_TIMEOUT_MUTEX_UNLOCK(pdev);
@@ -523,7 +668,7 @@ ol_rx_sec_ind_handler(
 
     if (sec_type != htt_sec_type_wapi) {
         adf_os_mem_set(peer->tids_last_pn_valid, 0x00, OL_TXRX_NUM_EXT_TIDS);
-    } else if (sec_index == txrx_sec_mcast) {
+    } else if (sec_index == txrx_sec_mcast || peer->tids_last_pn_valid[0]) {
         for (i = 0; i < OL_TXRX_NUM_EXT_TIDS; i++) {
             /*
              * Setting PN valid bit for WAPI sec_type,
@@ -677,24 +822,27 @@ ol_rx_offload_deliver_ind_handler(
     htt_pdev_handle htt_pdev = pdev->htt_pdev;
 
     while (msdu_cnt) {
-        htt_rx_offload_msdu_pop(
+        if (!htt_rx_offload_msdu_pop(
             htt_pdev, msg, &vdev_id, &peer_id,
-            &tid, &fw_desc, &head_buf, &tail_buf);
-
-        peer = ol_txrx_peer_find_by_id(pdev, peer_id);
-        if (peer && peer->vdev) {
-            vdev = peer->vdev;
-	    OL_RX_OSIF_DELIVER(vdev, peer, head_buf);
-        } else {
-            buf = head_buf;
-            while (1) {
-                adf_nbuf_t next;
-                next = adf_nbuf_next(buf);
-                htt_rx_desc_frame_free(htt_pdev, buf);
-                if (buf == tail_buf) {
-                    break;
+            &tid, &fw_desc, &head_buf, &tail_buf)) {
+            peer = ol_txrx_peer_find_by_id(pdev, peer_id);
+            if (peer && peer->vdev) {
+                vdev = peer->vdev;
+                if (pdev->cfg.is_high_latency)
+                    ol_rx_fwd_check(vdev, peer, tid, head_buf);
+                else
+                    OL_RX_OSIF_DELIVER(vdev, peer, head_buf);
+            } else {
+                buf = head_buf;
+                while (1) {
+                    adf_nbuf_t next;
+                    next = adf_nbuf_next(buf);
+                    htt_rx_desc_frame_free(htt_pdev, buf);
+                    if (buf == tail_buf) {
+                        break;
+                    }
+                    buf = next;
                 }
-                buf = next;
             }
         }
         msdu_cnt--;
@@ -920,9 +1068,89 @@ DONE:
                 adf_nbuf_set_next(deliver_list_tail, NULL); /* add NULL terminator */
             }
         } else {
+            /* If this is for OCB, then prepend the RX stats header. */
+            if (vdev->opmode == wlan_op_mode_ocb) {
+                int i;
+                struct ol_txrx_ocb_chan_info *chan_info = 0;
+                int packet_freq = peer->last_pkt_center_freq;
+                for (i = 0; i < vdev->ocb_channel_count; i++) {
+                    if (vdev->ocb_channel_info[i].chan_freq == packet_freq) {
+                        chan_info = &vdev->ocb_channel_info[i];
+                        break;
+                    }
+                }
+                if (!chan_info || !chan_info->disable_rx_stats_hdr) {
+                    struct ether_header eth_header = { {0} };
+                    struct ocb_rx_stats_hdr_t rx_header = {0};
+
+                    /*
+                     * Construct the RX stats header and push that to the front
+                     * of the packet.
+                     */
+                    rx_header.version = 1;
+                    rx_header.length = sizeof(rx_header);
+                    rx_header.channel_freq = peer->last_pkt_center_freq;
+                    rx_header.rssi_cmb = peer->last_pkt_rssi_cmb;
+                    adf_os_mem_copy(rx_header.rssi, peer->last_pkt_rssi,
+                                    sizeof(rx_header.rssi));
+                    if (peer->last_pkt_legacy_rate_sel == 0) {
+                        switch (peer->last_pkt_legacy_rate) {
+                        case 0x8:
+                            rx_header.datarate = 6;
+                            break;
+                        case 0x9:
+                            rx_header.datarate = 4;
+                            break;
+                        case 0xA:
+                            rx_header.datarate = 2;
+                            break;
+                        case 0xB:
+                            rx_header.datarate = 0;
+                            break;
+                        case 0xC:
+                            rx_header.datarate = 7;
+                            break;
+                        case 0xD:
+                            rx_header.datarate = 5;
+                            break;
+                        case 0xE:
+                            rx_header.datarate = 3;
+                            break;
+                        case 0xF:
+                            rx_header.datarate = 1;
+                            break;
+                        default:
+                            rx_header.datarate = 0xFF;
+                            break;
+                        }
+                    } else {
+                        rx_header.datarate = 0xFF;
+                    }
+
+                    rx_header.timestamp_microsec =
+                        peer->last_pkt_timestamp_microsec;
+                    rx_header.timestamp_submicrosec =
+                        peer->last_pkt_timestamp_submicrosec;
+                    rx_header.tsf32 = peer->last_pkt_tsf;
+                    rx_header.ext_tid = peer->last_pkt_tid;
+
+                    adf_nbuf_push_head(msdu, sizeof(rx_header));
+                    adf_os_mem_copy(adf_nbuf_data(msdu), &rx_header,
+                                    sizeof(rx_header));
+
+                    /* Construct the ethernet header with type 0x8152 and push
+                       that to the front of the packet to indicate the RX stats
+                       header. */
+                    eth_header.ether_type = adf_os_htons(ETHERTYPE_OCB_RX);
+                    adf_nbuf_push_head(msdu, sizeof(eth_header));
+                    adf_os_mem_copy(adf_nbuf_data(msdu), &eth_header,
+                                    sizeof(eth_header));
+                }
+            }
             OL_RX_PEER_STATS_UPDATE(peer, msdu);
             OL_RX_ERR_STATISTICS_1(pdev, vdev, peer, rx_desc, OL_RX_ERR_NONE);
             TXRX_STATS_MSDU_INCR(vdev->pdev, rx.delivered, msdu);
+
             OL_TXRX_LIST_APPEND(deliver_list_head, deliver_list_tail, msdu);
         }
         msdu = next;
@@ -983,6 +1211,8 @@ ol_rx_peer_init(struct ol_txrx_pdev_t *pdev, struct ol_txrx_peer_t *peer)
 
         /* invalid sequence number */
         peer->tids_last_seq[tid] = IEEE80211_SEQ_MAX;
+        /* invalid reorder index number */
+        peer->tids_next_rel_idx[tid] = INVALID_REORDER_INDEX;
     }
     /*
      * Set security defaults: no PN check, no security.
@@ -991,6 +1221,10 @@ ol_rx_peer_init(struct ol_txrx_pdev_t *pdev, struct ol_txrx_peer_t *peer)
     peer->security[txrx_sec_ucast].sec_type =
         peer->security[txrx_sec_mcast].sec_type = htt_sec_type_none;
     peer->keyinstalled = 0;
+    peer->last_assoc_rcvd = 0;
+    peer->last_disassoc_rcvd = 0;
+    peer->last_deauth_rcvd = 0;
+
     adf_os_atomic_init(&peer->fw_pn_check);
 }
 
@@ -998,7 +1232,12 @@ void
 ol_rx_peer_cleanup(struct ol_txrx_vdev_t *vdev, struct ol_txrx_peer_t *peer)
 {
     peer->keyinstalled = 0;
+    peer->last_assoc_rcvd = 0;
+    peer->last_disassoc_rcvd = 0;
+    peer->last_deauth_rcvd = 0;
     ol_rx_reorder_peer_cleanup(vdev, peer);
+    adf_os_mem_free(peer->reorder_history);
+    peer->reorder_history = NULL;
 }
 
 /*
@@ -1034,6 +1273,8 @@ ol_rx_in_order_indication_handler(
 
     if (pdev) {
         peer = ol_txrx_peer_find_by_id(pdev, peer_id);
+        if (VOS_MONITOR_MODE == vos_get_conparam())
+            peer = pdev->self_peer;
         htt_pdev = pdev->htt_pdev;
     } else {
         TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
@@ -1072,13 +1313,58 @@ ol_rx_in_order_indication_handler(
     if (peer) {
         vdev = peer->vdev;
     } else {
-        TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+        TXRX_PRINT(TXRX_PRINT_LEVEL_INFO2,
                    "%s: Couldn't find peer from ID 0x%x\n", __FUNCTION__,
                    peer_id);
+        while (head_msdu) {
+            adf_nbuf_t msdu = head_msdu;
+
+            head_msdu = adf_nbuf_next(head_msdu);
+            htt_rx_desc_frame_free(htt_pdev, msdu);
+        }
         return;
     }
 
     peer->rx_opt_proc(vdev, peer, tid, head_msdu);
+}
+
+/**
+ * ol_rx_pkt_dump_call() - updates status and
+ * calls packetdump callback to log rx packet
+ *
+ * @msdu: rx packet
+ * @peer_id: peer id
+ * @status: status of rx packet
+ *
+ * This function is used to update the status of rx packet
+ * and then calls packetdump callback to log that packet.
+ *
+ * Return: None
+ *
+ */
+void ol_rx_pkt_dump_call(
+	adf_nbuf_t msdu,
+	struct ol_txrx_peer_t *peer,
+	uint8_t status)
+{
+	v_CONTEXT_t vos_context;
+	ol_txrx_pdev_handle pdev;
+
+	vos_context = vos_get_global_context(VOS_MODULE_ID_TXRX, NULL);
+	pdev = vos_get_context(VOS_MODULE_ID_TXRX, vos_context);
+
+	if (!pdev) {
+		TXRX_PRINT(TXRX_PRINT_LEVEL_ERR,
+			"%s: pdev is NULL", __func__);
+		return;
+	}
+
+	if (pdev->ol_rx_packetdump_cb) {
+		if (!peer)
+			return;
+		pdev->ol_rx_packetdump_cb(msdu, status, peer->vdev->vdev_id,
+						RX_DATA_PKT);
+	}
 }
 
 /* the msdu_list passed here must be NULL terminated */
@@ -1102,6 +1388,11 @@ ol_rx_in_order_deliver(
     while (msdu) {
         adf_nbuf_t next = adf_nbuf_next(msdu);
 
+        DPTRACE(adf_dp_trace(msdu,
+                ADF_DP_TRACE_RX_TXRX_PACKET_PTR_RECORD,
+                adf_nbuf_data_addr(msdu),
+                sizeof(adf_nbuf_data(msdu)), ADF_RX));
+
         OL_RX_PEER_STATS_UPDATE(peer, msdu);
         OL_RX_ERR_STATISTICS_1(vdev->pdev, vdev, peer, rx_desc, OL_RX_ERR_NONE);
         TXRX_STATS_MSDU_INCR(vdev->pdev, rx.delivered, msdu);
@@ -1116,6 +1407,24 @@ ol_rx_in_order_deliver(
         0 /* don't print contents */);
 
     OL_RX_OSIF_DELIVER(vdev, peer, msdu_list);
+}
+
+/**
+ * ol_rx_log_packet() - log rx packet
+ * @htt_pdev: htt pdev
+ * @peer_id: peer_id
+ * @msdu: skb
+ *
+ * Return: none
+ */
+void ol_rx_log_packet(htt_pdev_handle htt_pdev,
+                      uint8_t peer_id, adf_nbuf_t msdu)
+{
+    struct ol_txrx_peer_t *peer;
+
+    peer = ol_txrx_peer_find_by_id(htt_pdev->txrx_pdev, peer_id);
+    if (peer)
+        adf_dp_trace_log_pkt(peer->vdev->vdev_id, msdu, ADF_RX);
 }
 
 void
@@ -1138,6 +1447,14 @@ ol_rx_offload_paddr_deliver_ind_handler(
 
         peer = ol_txrx_peer_find_by_id(htt_pdev->txrx_pdev, peer_id);
         if (peer && peer->vdev) {
+            adf_dp_trace_set_track(head_buf, ADF_RX);
+            NBUF_SET_PACKET_TRACK(head_buf, NBUF_TX_PKT_DATA_TRACK);
+            adf_dp_trace_log_pkt(peer->vdev->vdev_id,
+                                 head_buf, ADF_RX);
+            DPTRACE(adf_dp_trace(head_buf,
+                    ADF_DP_TRACE_RX_OFFLOAD_HTT_PACKET_PTR_RECORD,
+                    adf_nbuf_data_addr(head_buf),
+                    sizeof(adf_nbuf_data(head_buf)), ADF_RX));
             vdev = peer->vdev;
             OL_RX_OSIF_DELIVER(vdev, peer, head_buf);
         } else {
@@ -1156,6 +1473,38 @@ ol_rx_offload_paddr_deliver_ind_handler(
         msdu_count--;
     }
     htt_rx_msdu_buff_replenish(htt_pdev);
+}
+
+void
+ol_rx_mic_error_handler(
+    ol_txrx_pdev_handle pdev,
+    u_int8_t tid,
+    u_int16_t peer_id,
+    void * msdu_desc,
+    adf_nbuf_t msdu )
+{
+    union htt_rx_pn_t pn = {0};
+    u_int8_t key_id = 0;
+
+    struct ol_txrx_peer_t *peer = NULL;
+    struct ol_txrx_vdev_t *vdev = NULL;
+
+    if (pdev) {
+        peer = ol_txrx_peer_find_by_id(pdev, peer_id);
+        if (peer) {
+            vdev = peer->vdev;
+            if (vdev) {
+                htt_rx_mpdu_desc_pn(vdev->pdev->htt_pdev, msdu_desc, &pn, 48);
+
+                if (htt_rx_msdu_desc_key_id(vdev->pdev->htt_pdev, msdu_desc, &key_id)
+                     == A_TRUE) {
+                    ol_rx_err(vdev->pdev->ctrl_pdev, vdev->vdev_id,
+                              peer->mac_addr.raw, tid, 0,
+                              OL_RX_ERR_TKIP_MIC, msdu, &pn.pn48, key_id);
+                }
+            }
+        }
+    }
 }
 #if 0
 /**

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011, 2014 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2011, 2014-2016 The Linux Foundation. All rights reserved.
  *
  * Previously licensed under the ISC license by Qualcomm Atheros, Inc.
  *
@@ -119,6 +119,33 @@ htt_htc_pkt_pool_free(struct htt_pdev_t *pdev)
 
 #ifdef ATH_11AC_TXCOMPACT
 void
+htt_htc_misc_pkt_list_trim(struct htt_pdev_t *pdev, int level)
+{
+    struct htt_htc_pkt_union *pkt, *next, *prev = NULL;
+    int i = 0;
+    adf_nbuf_t netbuf;
+
+    HTT_TX_MUTEX_ACQUIRE(&pdev->htt_tx_mutex);
+    pkt = pdev->htt_htc_pkt_misclist;
+    while (pkt) {
+        next = pkt->u.next;
+        /* trim the out grown list*/
+        if (++i > level) {
+            netbuf = (adf_nbuf_t)(pkt->u.pkt.htc_pkt.pNetBufContext);
+            adf_nbuf_unmap(pdev->osdev, netbuf, ADF_OS_DMA_TO_DEVICE);
+            adf_nbuf_free(netbuf);
+            adf_os_mem_free(pkt);
+            pkt = NULL;
+            if (prev)
+                prev->u.next = NULL;
+        }
+        prev = pkt;
+        pkt = next;
+    }
+    HTT_TX_MUTEX_RELEASE(&pdev->htt_tx_mutex);
+}
+
+void
 htt_htc_misc_pkt_list_add(struct htt_pdev_t *pdev, struct htt_htc_pkt *pkt)
 {
     struct htt_htc_pkt_union *u_pkt = (struct htt_htc_pkt_union *) pkt;
@@ -131,6 +158,7 @@ htt_htc_misc_pkt_list_add(struct htt_pdev_t *pdev, struct htt_htc_pkt *pkt)
         pdev->htt_htc_pkt_misclist = u_pkt;
     }
     HTT_TX_MUTEX_RELEASE(&pdev->htt_tx_mutex);
+    htt_htc_misc_pkt_list_trim(pdev, HTT_HTC_PKT_MISCLIST_SIZE);
 }
 
 void
@@ -144,7 +172,7 @@ htt_htc_misc_pkt_pool_free(struct htt_pdev_t *pdev)
         next = pkt->u.next;
         netbuf = (adf_nbuf_t)(pkt->u.pkt.htc_pkt.pNetBufContext);
         adf_nbuf_unmap(pdev->osdev, netbuf, ADF_OS_DMA_TO_DEVICE);
-        adf_os_mem_free(netbuf);
+        adf_nbuf_free(netbuf);
         adf_os_mem_free(pkt);
         pkt = next;
     }
@@ -214,6 +242,7 @@ htt_attach(
 
     HTT_TX_MUTEX_INIT(&pdev->htt_tx_mutex);
     HTT_TX_NBUF_QUEUE_MUTEX_INIT(pdev);
+    HTT_TX_MUTEX_INIT(&pdev->credit_mutex);
 
     /* pre-allocate some HTC_PACKET objects */
     for (i = 0; i < HTT_HTC_PKT_POOL_INIT_SIZE; i++) {
@@ -360,9 +389,17 @@ htt_attach_target(htt_pdev_handle pdev)
     return status;
 }
 
+void htt_htc_detach(struct htt_pdev_t *pdev)
+{
+    htc_disconnect_service(pdev->htc_endpoint);
+    return;
+}
+
+
 void
 htt_detach(htt_pdev_handle pdev)
 {
+    htt_htc_detach(pdev);
     htt_rx_detach(pdev);
     htt_tx_detach(pdev);
     htt_htc_pkt_pool_free(pdev);
@@ -371,6 +408,11 @@ htt_detach(htt_pdev_handle pdev)
 #endif
     HTT_TX_MUTEX_DESTROY(&pdev->htt_tx_mutex);
     HTT_TX_NBUF_QUEUE_MUTEX_DESTROY(pdev);
+    HTT_TX_MUTEX_DESTROY(&pdev->credit_mutex);
+#ifdef DEBUG_RX_RING_BUFFER
+    if (pdev->rx_buff_list)
+        adf_os_mem_free(pdev->rx_buff_list);
+#endif
     adf_os_mem_free(pdev);
 }
 
@@ -395,6 +437,7 @@ htt_htc_attach(struct htt_pdev_t *pdev)
     connect.EpCallbacks.EpTxComplete = htt_h2t_send_complete;
     connect.EpCallbacks.EpTxCompleteMultiple = NULL;
     connect.EpCallbacks.EpRecv = htt_t2h_msg_handler;
+    connect.EpCallbacks.EpResumeTxQueue = htt_tx_resume_handler;
 
     /* rx buffers currently are provided by HIF, not by EpRecvRefill */
     connect.EpCallbacks.EpRecvRefill = NULL;
@@ -609,4 +652,37 @@ htt_ipa_uc_set_doorbell_paddr(htt_pdev_handle pdev,
    return 0;
 }
 #endif /* IPA_UC_OFFLOAD */
+
+#if defined(DEBUG_HL_LOGGING) && defined(CONFIG_HL_SUPPORT)
+
+void htt_dump_bundle_stats(htt_pdev_handle pdev)
+{
+    HTCDumpBundleStats(pdev->htc_pdev);
+}
+
+void htt_clear_bundle_stats(htt_pdev_handle pdev)
+{
+    HTCClearBundleStats(pdev->htc_pdev);
+}
+#endif
+
+/**
+ * htt_mark_first_wakeup_packet() - set flag to indicate that
+ *    fw is compatible for marking first packet after wow wakeup
+ * @pdev: pointer to htt pdev
+ * @value: 1 for enabled/ 0 for disabled
+ *
+ * Return: None
+ */
+void htt_mark_first_wakeup_packet(htt_pdev_handle pdev,
+			uint8_t value)
+{
+	if (!pdev) {
+		adf_os_print("%s: htt pdev is NULL", __func__);
+		return;
+	}
+
+	pdev->cfg.is_first_wakeup_packet = value;
+}
+
 
