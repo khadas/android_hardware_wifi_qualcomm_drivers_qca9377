@@ -114,8 +114,9 @@ void limUpdateAssocStaDatas(tpAniSirGlobal pMac, tpDphHashNode pStaDs, tpSirAsso
                            pAssocRsp->HTInfo.recommendedTxWidthSet :
                            pAssocRsp->HTCaps.supportedChannelWidthSet);
                }
-               else
+               else {
                    pStaDs->htSupportedChannelWidthSet = eHT_CHANNEL_WIDTH_20MHZ;
+               }
 
                    pStaDs->htLsigTXOPProtection = ( tANI_U8 ) pAssocRsp->HTCaps.lsigTXOPProtection;
                    pStaDs->htMIMOPSState =  (tSirMacHTMIMOPowerSaveState)pAssocRsp->HTCaps.mimoPowerSave;

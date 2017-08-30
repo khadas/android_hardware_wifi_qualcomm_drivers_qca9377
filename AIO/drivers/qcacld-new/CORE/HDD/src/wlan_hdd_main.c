@@ -249,6 +249,158 @@ DEFINE_SPINLOCK(hdd_context_lock);
 /*
  * Android DRIVER command structures
  */
+#ifndef CONFIG_BUILDROOT
+
+typedef char            A_CHAR;
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(2,6,20)
+#define GET_INODE_FROM_FILEP(filp) \
+    (filp)->f_path.dentry->d_inode
+#else
+#define GET_INODE_FROM_FILEP(filp) \
+    (filp)->f_dentry->d_inode
+#endif
+#define A_ROUND_UP(x, y)  ((((x) + ((y) - 1)) / (y)) * (y))
+char qcafwpath[256] = "/system/vendor/etc/wifi/qca9377";
+
+static int android_readwrite_file(const A_CHAR *filename, A_CHAR *rbuf, const A_CHAR *wbuf, size_t length)
+{
+    int ret = 0;
+    struct file *filp = (struct file *)-ENOENT;
+    mm_segment_t oldfs;
+    oldfs = get_fs();
+    set_fs(KERNEL_DS);
+
+    hddLog(VOS_TRACE_LEVEL_INFO, "%s: filename %s \n", __func__, filename);
+
+    do {
+        int mode = (wbuf) ? O_RDWR : O_RDONLY;
+        filp = filp_open(filename, mode, S_IRUSR);
+        if (IS_ERR(filp) || !filp->f_op) {
+            hddLog(VOS_TRACE_LEVEL_ERROR, "%s: filename %s \n", __func__, filename);
+            ret = -ENOENT;
+            break;
+        }
+
+        if (length == 0) {
+            /* Read the length of the file only */
+            struct inode    *inode;
+
+            inode = GET_INODE_FROM_FILEP(filp);
+            if (!inode) {
+                hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Get inode from %s failed \n", __func__, filename);
+                ret = -ENOENT;
+                break;
+            }
+            ret = i_size_read(inode->i_mapping->host);
+            break;
+        }
+
+        if (wbuf) {
+           if ( (ret=filp->f_op->write(filp, wbuf, length, &filp->f_pos)) < 0) {
+                hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Write %u bytes to file %s error %d\n", __FUNCTION__,
+                                (unsigned int)length, filename, ret);
+                break;
+            }
+        } else {
+            if ( (ret=filp->f_op->read(filp, rbuf, length, &filp->f_pos)) < 0) {
+                hddLog(VOS_TRACE_LEVEL_ERROR,"%s: Read %u bytes from file %s error %d\n", __FUNCTION__,
+                                (unsigned int)length, filename, ret);
+                break;
+            }
+        }
+    } while (0);
+
+    if (!IS_ERR(filp)) {
+        filp_close(filp, NULL);
+    }
+    set_fs(oldfs);
+
+    return ret;
+}
+
+
+int android_request_firmware(const struct firmware **firmware_p, const char *name,struct device *device)
+{
+    int ret = 0;
+    struct firmware *firmware;
+    char filename[256];
+    const char *raw_filename = name;
+    *firmware_p = firmware = A_MALLOC(sizeof(*firmware));
+    if (!firmware)
+        return -ENOMEM;
+    A_MEMZERO(firmware, sizeof(*firmware));
+    do {
+        size_t length, bufsize, bmisize;
+
+        if (snprintf(filename, sizeof(filename), "%s/%s", qcafwpath,
+                                raw_filename) >= sizeof(filename)) {
+            hddLog(VOS_TRACE_LEVEL_ERROR, "snprintf: %s/%s\n", qcafwpath, raw_filename);
+            ret = -1;
+            break;
+        }
+        if ( (ret=android_readwrite_file(filename, NULL, NULL, 0)) < 0) {
+            break;
+        } else {
+            length = ret;
+        }
+
+        if (strcmp(raw_filename, "softmac") == 0) {
+            bufsize = length = 17;
+        } else {
+            bufsize = ALIGN(length, PAGE_SIZE);
+            bmisize = A_ROUND_UP(length, 4);
+            bufsize = max(bmisize, bufsize);
+        }
+        firmware->data = vmalloc(bufsize);
+        firmware->size = length;
+
+        if (!firmware->data) {
+            hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Cannot allocate buffer for firmware\n", __FUNCTION__);
+            ret = -ENOMEM;
+            break;
+        }
+
+        if ( (ret=android_readwrite_file(filename, (char*)firmware->data, NULL, length)) != length) {
+            hddLog(VOS_TRACE_LEVEL_ERROR, "%s: file read error, ret %d request %d\n", __FUNCTION__,ret,(int)length);
+            ret = -1;
+            break;
+        }
+
+    } while (0);
+
+    if (ret<0) {
+        if (firmware) {
+        if (firmware->data)
+                vfree(firmware->data);
+            A_FREE(firmware);
+        }
+        *firmware_p = NULL;
+    } else {
+        ret = 0;
+    }
+    return ret;
+}
+
+void android_release_firmware(const struct firmware *firmware)
+{
+    if (firmware) {
+        if (firmware->data)
+            vfree(firmware->data);
+        kfree(firmware);
+    }
+}
+#endif
+int qca_request_firmware(const struct firmware **firmware_p,const char *name,struct device *device)
+{
+#ifdef CONFIG_BUILDROOT
+    char final_name[512];
+    sprintf(final_name,"qca9377/%s",name);
+    return request_firmware(firmware_p, final_name, device);
+#else
+    return android_request_firmware(firmware_p, name,device);
+#endif
+}
+
 struct android_wifi_reassoc_params {
    unsigned char bssid[18];
    int channel;
@@ -9882,7 +10034,7 @@ VOS_STATUS hdd_get_cfg_file_size(v_VOID_t *pCtx, char *pFileName, v_SIZE_t *pBuf
 
    ENTER();
 
-   status = request_firmware(&pHddCtx->fw, pFileName, pHddCtx->parent_dev);
+   status = qca_request_firmware(&pHddCtx->fw, pFileName, pHddCtx->parent_dev);
 
    if(status || !pHddCtx->fw || !pHddCtx->fw->data) {
       hddLog(VOS_TRACE_LEVEL_FATAL,"%s: CFG download failed",__func__);
@@ -9923,7 +10075,7 @@ VOS_STATUS hdd_read_cfg_file(v_VOID_t *pCtx, char *pFileName,
 
    ENTER();
 
-   status = request_firmware(&pHddCtx->fw, pFileName, pHddCtx->parent_dev);
+   status = qca_request_firmware(&pHddCtx->fw, pFileName, pHddCtx->parent_dev);
 
    if(status || !pHddCtx->fw || !pHddCtx->fw->data) {
       hddLog(VOS_TRACE_LEVEL_FATAL,"%s: CFG download failed",__func__);
@@ -15133,11 +15285,12 @@ static void hdd_state_info_dump(char **buf_ptr, uint16_t *size)
 
 	while (NULL != adapter_node && VOS_STATUS_SUCCESS == status) {
 		adapter = adapter_node->pAdapter;
-		if (adapter->dev)
+		if (adapter->dev) {
 			len += scnprintf(buf + len, *size - len,
 				"\n device name: %s", adapter->dev->name);
-			len += scnprintf(buf + len, *size - len,
-				"\n device_mode: %d", adapter->device_mode);
+		}
+		len += scnprintf(buf + len, *size - len,
+			"\n device_mode: %d", adapter->device_mode);
 		switch (adapter->device_mode) {
 		case WLAN_HDD_INFRA_STATION:
 		case WLAN_HDD_P2P_CLIENT:
@@ -16786,9 +16939,26 @@ static int hdd_driver_init( void)
   \return - 0 for success, non zero for failure
 
   --------------------------------------------------------------------------*/
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+extern  int wifi_setup_dt(void);
+extern  void wifi_teardown_dt(void);
+#endif
+extern  void extern_wifi_set_enable(int is_on);
+extern  void sdio_reinit(void);
+
+
 #ifdef MODULE
 static int __init hdd_module_init ( void)
 {
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+   wifi_setup_dt();
+#endif
+   extern_wifi_set_enable(0);
+   mdelay(200);
+   extern_wifi_set_enable(1);
+   mdelay(200);
+   sdio_reinit();
+
    return hdd_driver_init();
 }
 #else /* #ifdef MODULE */
@@ -16888,6 +17058,12 @@ static void hdd_driver_exit(void)
 
 done:
    hdd_wlan_wakelock_destroy();
+   mdelay(100);
+   extern_wifi_set_enable(0);
+   mdelay(100);
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+   wifi_teardown_dt();
+#endif
    pr_info("%s: driver unloaded\n", WLAN_MODULE_NAME);
 }
 

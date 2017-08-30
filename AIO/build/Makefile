@@ -26,7 +26,7 @@ endif
 #################################################################################################################################
 export MAKEARCH=make ARCH=$(KERNELARCH) CROSS_COMPILE=$(TOOLPREFIX)
 
-export INSTALL_ROOT=${ATH_TOPDIR}/rootfs-$(BOARD_TYPE).build
+export INSTALL_ROOT=${ATH_TOPDIR}/rootfs-x86-android.build
 export ROOTFS_TOPDIR=${ATH_TOPDIR}/rootfs
 export WLAN_DRIVER_TOPDIR=${ATH_TOPDIR}/drivers
 export IW30_TOPDIR=${ATH_TOPDIR}/apps/iw-3.0
@@ -50,7 +50,7 @@ export FW_WLAN_NAME=qcacld-new
 export CFG80211_NAME=backports
 
 #################################################################################################################################
-clean: hostapd_clean wpa_supplicant_clean drivers_clean rootfs_clean
+clean:  drivers_clean rootfs_clean
 
 #
 # rootfs build
@@ -77,19 +77,8 @@ rootfs_clean:
 drivers: rootfs_prep
 	@echo Build drivers
 	cd ${WLAN_DRIVER_TOPDIR} && ${MAKEARCH}
-	find ${WLAN_DRIVER_TOPDIR} -name 'cfg80211.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'compat.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
 	find ${WLAN_DRIVER_TOPDIR} -name 'wlan.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'wlan_prealloc.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'bluetooth.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'hci_uart.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'btusb.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'ath3k.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'hidp.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'rfcomm.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'cmtp.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'bnep.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
-	find ${WLAN_DRIVER_TOPDIR} -name 'Tuffelo_wlan.ko' -exec cp '{}' $(INSTALL_ROOT)/lib/modules ';'
+
 	@echo Backup the unstripped modules
 	cp -fr $(INSTALL_ROOT)/lib/modules $(INSTALL_ROOT)/lib/unstripped_modules
 	@echo Strip modules

@@ -1774,11 +1774,13 @@ int dbglog_report_enable(wmi_unified_t  wmi_handle, bool isenable)
 {
     int bitmap[2] = {0};
 
+#if 0 //alwase false
     if (isenable > TRUE) {
         AR_DEBUG_PRINTF(ATH_DEBUG_ERR, ("dbglog_report_enable:Invalid value %d\n",
         isenable));
         return -EINVAL;
     }
+#endif
 
     if(isenable){
 	/* set the vap enable bitmap */

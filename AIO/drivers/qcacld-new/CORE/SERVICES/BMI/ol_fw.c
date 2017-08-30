@@ -151,6 +151,8 @@ static int ol_get_fw_files_for_target(struct ol_fw_files *pfw_files,
 }
 #endif
 
+extern int qca_request_firmware(const struct firmware **firmware_p, const char *name,struct device *device);
+
 #ifdef HIF_USB
 static A_STATUS ol_usb_extra_initialization(struct ol_softc *scn);
 #endif
@@ -196,7 +198,7 @@ static int ol_transfer_single_bin_file(struct ol_softc *scn,
 				__func__));
 	}
 
-	if (request_firmware(&fw_entry, filename, scn->sc_osdev->device) != 0)
+	if (qca_request_firmware(&fw_entry, filename, scn->sc_osdev->device) != 0)
 	{
 		AR_DEBUG_PRINTF(ATH_DEBUG_ERR,
 				("%s: Failed to get %s\n",
@@ -681,10 +683,9 @@ static int __ol_transfer_bin_file(struct ol_softc *scn, ATH_BIN_FILE file,
 		break;
 	}
 
-       status = request_firmware(&fw_entry, filename, scn->sc_osdev->device);
-	if (status)
+	if (qca_request_firmware(&fw_entry, filename, scn->sc_osdev->device) != 0)
 	{
-		pr_err("%s: Failed to get %s:%d\n", __func__, filename, status);
+		pr_err("%s: Failed to get %s\n", __func__, filename);
 
 		if (file == ATH_OTP_FILE)
 			return -ENOENT;
@@ -702,11 +703,10 @@ static int __ol_transfer_bin_file(struct ol_softc *scn, ATH_BIN_FILE file,
 			pr_info("%s: Trying to load default %s\n",
 							__func__, filename);
 
-			status = request_firmware(&fw_entry, filename,
-					scn->sc_osdev->device);
-			if (status) {
-				pr_err("%s: Failed to get %s:%d\n",
-						__func__, filename, status);
+			if (qca_request_firmware(&fw_entry, filename,
+					scn->sc_osdev->device) != 0) {
+				pr_err("%s: Failed to get %s\n",
+							__func__, filename);
 				kfree(bd_id_filename);
 				return -1;
 			}

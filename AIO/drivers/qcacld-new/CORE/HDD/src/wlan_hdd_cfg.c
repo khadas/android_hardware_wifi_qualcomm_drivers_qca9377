@@ -60,6 +60,8 @@
 #include <pmcApi.h>
 #include <wlan_hdd_misc.h>
 
+extern int qca_request_firmware(const struct firmware **firmware_p, const char *name,struct device *device);
+
 #if  defined (WLAN_FEATURE_VOWIFI_11R) || defined (FEATURE_WLAN_ESE) || defined(FEATURE_WLAN_LFR)
 static void
 cbNotifySetRoamPrefer5GHz(hdd_context_t *pHddCtx, unsigned long NotifyId)
@@ -5085,7 +5087,8 @@ static char *i_trim(char *str)
    if(*str == '\0') return str;
 
    /* Find the first non white-space*/
-   for (ptr = str; i_isspace(*ptr); ptr++);
+   for (ptr = str; i_isspace(*ptr); ptr++) {};
+
       if (*ptr == '\0')
          return str;
 
@@ -5094,7 +5097,8 @@ static char *i_trim(char *str)
 
    /* Find the last non white-space */
    ptr += strlen(ptr) - 1;
-   for (; ptr != str && i_isspace(*ptr); ptr--);
+   for (; ptr != str && i_isspace(*ptr); ptr--) {};
+
       /* Null terminate the following character */
       ptr[1] = '\0';
 
@@ -5189,7 +5193,7 @@ VOS_STATUS hdd_parse_config_ini(hdd_context_t* pHddCtx)
 
    memset(cfgIniTable, 0, sizeof(cfgIniTable));
 
-   status = request_firmware(&fw, WLAN_INI_FILE, pHddCtx->parent_dev);
+   status = qca_request_firmware(&fw, WLAN_INI_FILE, pHddCtx->parent_dev);
 
    if(status)
    {
@@ -6108,7 +6112,7 @@ VOS_STATUS hdd_update_mac_config(hdd_context_t *pHddCtx)
    VOS_STATUS vos_status = VOS_STATUS_SUCCESS;
 
    memset(macTable, 0, sizeof(macTable));
-   status = request_firmware(&fw, WLAN_MAC_FILE, pHddCtx->parent_dev);
+   status = qca_request_firmware(&fw, WLAN_MAC_FILE, pHddCtx->parent_dev);
 
    if (status)
    {
@@ -7090,7 +7094,7 @@ v_BOOL_t hdd_update_config_dat( hdd_context_t *pHddCtx )
 
 #if defined WLAN_FEATURE_VOWIFI
     if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_MCAST_BCAST_FILTER_SETTING, pConfig->mcastBcastFilterSetting,
-                     NULL, eANI_BOOLEAN_FALSE)==eHAL_STATUS_FAILURE)
+                     NULL, eANI_BOOLEAN_FALSE)==eHAL_STATUS_FAILURE) {
 #endif
 
      if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_SINGLE_TID_RC, pConfig->bSingleTidRc,
@@ -7099,6 +7103,9 @@ v_BOOL_t hdd_update_config_dat( hdd_context_t *pHddCtx )
         fStatus = FALSE;
         hddLog(LOGE,"Failure: Could not pass on WNI_CFG_SINGLE_TID_RC configuration info to CCM");
      }
+#if defined WLAN_FEATURE_VOWIFI
+     }
+#endif
 
      if (ccmCfgSetInt(pHddCtx->hHal, WNI_CFG_TELE_BCN_WAKEUP_EN, pConfig->teleBcnWakeupEn,
                       NULL, eANI_BOOLEAN_FALSE)==eHAL_STATUS_FAILURE)

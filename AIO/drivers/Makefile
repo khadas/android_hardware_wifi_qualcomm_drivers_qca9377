@@ -95,6 +95,7 @@ endif
 
 #NOSTDINC_FLAGS := -I${WLAN_DRIVER_TOPDIR}/cfg80211/include/
 
+
 KBUILD_OPTIONS := WLAN_ROOT=$(PWD)/$(FW_WLAN_NAME)
 ifdef CONFIG_ANDROID_APQ8084_PLATFORM_TUFELLO
 KBUILD_OPTIONS += MODNAME=Tuffelo_wlan
@@ -107,6 +108,8 @@ KBUILD_OPTIONS += CONFIG_QCA_WIFI_ISOC=0
 KBUILD_OPTIONS += CONFIG_QCA_WIFI_2_0=1
 KBUILD_OPTIONS += $(WLAN_SELECT)
 KBUILD_OPTIONS += WLAN_OPEN_SOURCE=1
+
+
 ifeq ($(IF_TYPE),PCIE)
 KBUILD_OPTIONS += CONFIG_PRIMA_WLAN_11AC_HIGH_TP=$(CONFIG_PRIMA_WLAN_11AC_HIGH_TP)
 endif 
@@ -133,14 +136,14 @@ NOSTDINC_FLAGS += \
 	$(CFLAGS)
 
 
-	TARGET_ALL := clean backports_build qcacld_build
+	TARGET_ALL := backports_build qcacld_build
 	TARGET_CLEAN := backports_clean qcacld_clean
 
 KERNEL_BACKPORT_PWD := $(ATH_DRIVER_TOPDIR)/$(CFG80211_NAME)
 MODULE_SYMBOL_DIR := $(ATH_DRIVER_TOPDIR)/$(CFG80211_NAME)
 else ifeq ($(CONFIG_CFG80211_DEPEND_ON_KERNEL),y)
 	NOSTDINC_FLAGS +=-fno-pic
-	TARGET_ALL := clean qcacld_build
+	TARGET_ALL := qcacld_build
 	TARGET_CLEAN :=  qcacld_clean
 	MODULE_SYMBOL_DIR :=${CONFIG_KERNEL_SYMBOL_DIR}
 else
@@ -149,13 +152,13 @@ else
        	-I$(CFG80211_DIR)/net/wireless \
        	-DCONFIG_NL80211_TESTMODE=y \
        	$(CFLAGS)
-	TARGET_ALL := clean cfg80211_build qcacld_build
+	TARGET_ALL := cfg80211_build qcacld_build
 	TARGET_CLEAN := cfg80211_clean qcacld_clean
 	MODULE_SYMBOL_DIR := $(CFG80211_DIR)/net/wireless
 endif
 
 #################################################################################################################################
-all: $(TARGET_ALL) firmware_install
+all: $(TARGET_ALL)
 
 clean: $(TARGET_CLEAN)
 
@@ -179,7 +182,7 @@ cfg80211_clean:
 # qcacld driver build
 #
 qcacld_build:
-	${MAKEARCH} -C $(KERNELPATH) SUBDIRS=$(ATH_QCACLD_TOPDIR) KBUILD_EXTRA_SYMBOLS=$(MODULE_SYMBOL_DIR)/Module.symvers modules  $(KBUILD_OPTIONS)
+	${MAKEARCH} -C $(KERNELPATH) SUBDIRS=$(ATH_QCACLD_TOPDIR) KBUILD_EXTRA_SYMBOLS=$(MODULE_SYMBOL_DIR)/Module.symvers modules  $(KBUILD_OPTIONS) -j8
 
 qcacld_clean:
 	${MAKEARCH} -C $(KERNELPATH) SUBDIRS=$(ATH_QCACLD_TOPDIR) clean

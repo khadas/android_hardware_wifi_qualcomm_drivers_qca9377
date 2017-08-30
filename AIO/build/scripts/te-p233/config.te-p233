@@ -1,15 +1,26 @@
 #
 # Please modify KERNELPATH, KERNELARCH and TOOLPREFIX to meet your environment
 #
-export KERNELPATH=/lib/modules/${shell uname -r}/build
-export KERNELARCH=i386
-export TOOLPREFIX=
+#export KERNELPATH=/lib/modules/${shell uname -r}/build
 
+#export KERNELARCH=i386
+#export TOOLPREFIX=
+
+#export ANDROID_X86_PROJ_PATH=/mnt/nfsroot/weiguang.ruan/iptv44/
+#export KERNELPATH=${ANDROID_X86_PROJ_PATH}/out/target/product/p201_iptv/obj/KERNEL_OBJ
+export TOOLCHAIN=/opt/gcc-linaro-aarch64-linux-gnu-4.9-2014.09_linux/bin/
+export KERNELARCH=arm64
+export CROSS_COMPILE=aarch64-linux-gnu-
+export TOOLPREFIX=${CROSS_COMPILE}
 export CONFIG_NO_USE_BACKPORTS=y
 export CONFIG_CFG80211_DEPEND_ON_KERNEL=y
 # for backports
 export KLIB=${KERNELPATH}
 export KLIB_BUILD=${KERNELPATH}
+
+ifeq ($(KERNELARCH),arm64)
+    export ARCH=arm64
+endif
 
 # Use local libnl library or not
 export BUILD_LIBNL=y
