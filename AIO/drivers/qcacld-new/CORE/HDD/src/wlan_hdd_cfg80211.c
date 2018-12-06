@@ -19669,6 +19669,7 @@ wlan_hdd_cfg80211_inform_bss_frame_data(struct wiphy *wiphy,
 		uint64_t boottime_ns)
 {
 	struct cfg80211_bss *bss_status  = NULL;
+#if 0
 	struct cfg80211_inform_bss data  = {0};
 
 	data.chan = chan;
@@ -19676,6 +19677,11 @@ wlan_hdd_cfg80211_inform_bss_frame_data(struct wiphy *wiphy,
 	data.signal = rssi;
 	bss_status = cfg80211_inform_bss_frame_data(wiphy, &data, mgmt,
 						    frame_len, gfp);
+#else
+	bss_status = cfg80211_inform_bss_frame(wiphy, chan, mgmt, frame_len,
+											rssi, gfp);
+#endif
+
 	return bss_status;
 }
 #else
@@ -28242,7 +28248,11 @@ wlan_hdd_cfg80211_set_mac_acl(struct wiphy *wiphy,
 
 	return ret;
 }
+
+#ifndef CONFIG_NL80211_TESTMODE
 #undef WLAN_NL80211_TESTMODE
+#endif
+
 #ifdef WLAN_NL80211_TESTMODE
 #ifdef FEATURE_WLAN_LPHB
 void wlan_hdd_cfg80211_lphb_ind_handler
@@ -28490,7 +28500,7 @@ nla_put_failure:
               __func__);
 }
 #endif
-#endif /* CONFIG_NL80211_TESTMODE */
+#endif /* WLAN_NL80211_TESTMODE */
 
 /**
  * wlan_hdd_chan_info_cb() - channel info callback

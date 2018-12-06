@@ -260,17 +260,19 @@ typedef char            A_CHAR;
     (filp)->f_dentry->d_inode
 #endif
 #define A_ROUND_UP(x, y)  ((((x) + ((y) - 1)) / (y)) * (y))
-char qcafwpath[256] = "/system/vendor/etc/wifi/qca9377";
+char qcafwpath[256] = "/vendor/etc/wifi/qca9377";
 
 static int android_readwrite_file(const A_CHAR *filename, A_CHAR *rbuf, const A_CHAR *wbuf, size_t length)
 {
     int ret = 0;
     struct file *filp = (struct file *)-ENOENT;
+    loff_t pos=0;
     mm_segment_t oldfs;
     oldfs = get_fs();
     set_fs(KERNEL_DS);
 
-    hddLog(VOS_TRACE_LEVEL_INFO, "%s: filename %s \n", __func__, filename);
+    if (filename == NULL)
+        return 0;
 
     do {
         int mode = (wbuf) ? O_RDWR : O_RDONLY;
@@ -295,19 +297,8 @@ static int android_readwrite_file(const A_CHAR *filename, A_CHAR *rbuf, const A_
             break;
         }
 
-        if (wbuf) {
-           if ( (ret=filp->f_op->write(filp, wbuf, length, &filp->f_pos)) < 0) {
-                hddLog(VOS_TRACE_LEVEL_ERROR, "%s: Write %u bytes to file %s error %d\n", __FUNCTION__,
-                                (unsigned int)length, filename, ret);
-                break;
-            }
-        } else {
-            if ( (ret=filp->f_op->read(filp, rbuf, length, &filp->f_pos)) < 0) {
-                hddLog(VOS_TRACE_LEVEL_ERROR,"%s: Read %u bytes from file %s error %d\n", __FUNCTION__,
-                                (unsigned int)length, filename, ret);
-                break;
-            }
-        }
+        ret = vfs_read(filp,rbuf, length, &pos);
+
     } while (0);
 
     if (!IS_ERR(filp)) {
