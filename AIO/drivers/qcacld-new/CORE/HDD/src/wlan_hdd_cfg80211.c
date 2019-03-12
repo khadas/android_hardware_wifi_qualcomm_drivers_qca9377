@@ -19739,7 +19739,7 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
     int rssi = 0;
     hdd_context_t *pHddCtx;
     int status;
-#ifdef CONFIG_CNSS
+#if 1 //def CONFIG_CNSS
     struct timespec ts;
 #endif
     hdd_config_t *cfg_param = NULL;
@@ -19758,7 +19758,7 @@ wlan_hdd_cfg80211_inform_bss_frame( hdd_adapter_t *pAdapter,
 
     memcpy(mgmt->bssid, bss_desc->bssId, ETH_ALEN);
 
-#ifdef CONFIG_CNSS
+#if 1 //def CONFIG_CNSS
     /* Android does not want the time stamp from the frame.
        Instead it wants a monotonic increasing value */
     vos_get_monotonic_boottime_ts(&ts);
@@ -25463,12 +25463,14 @@ static int __wlan_hdd_cfg80211_get_station(struct wiphy *wiphy,
 
     sinfo->tx_bytes = pAdapter->stats.tx_bytes;
 
+    sinfo->tx_packets = pAdapter->stats.tx_packets;
+/*
     sinfo->tx_packets =
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[0] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[1] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[2] +
        pAdapter->hdd_stats.summary_stat.tx_frm_cnt[3];
-
+*/
     sinfo->tx_retries =
        pAdapter->hdd_stats.summary_stat.multiple_retry_cnt[0] +
        pAdapter->hdd_stats.summary_stat.multiple_retry_cnt[1] +
